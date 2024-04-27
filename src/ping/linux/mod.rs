@@ -10,6 +10,8 @@ pub struct PingProtocol {
     target_sa: SocketAddr,
 }
 
+type PingResponse = (SocketAddr, u16, u16, u64, std::time::Instant);
+
 impl PingProtocol {
     pub fn new(target: SocketAddr) -> Result<Self, Box<dyn std::error::Error>> {
         let sockaddr = SockAddr::from(target);
@@ -32,7 +34,7 @@ impl PingProtocol {
         })
     }
 
-    pub fn send(&self) -> Result<(), std::io::Error> {
+    pub fn send(&self, sequence: u16, timestamp: u64) -> Result<(), std::io::Error> {
         let mut icmp_packet: [u8; 192] = [0; 192];
         let code = match self.target_sa {
             SocketAddr::V4(_) => 0x08,
@@ -40,6 +42,9 @@ impl PingProtocol {
         };
         let icmp_prefix: [u8; 16] = [code, 0, 0, 0, 0, 1, 0, 1, 0, 1, 2, 3, 4, 5, 6, 7];
         icmp_packet[0..16].copy_from_slice(&icmp_prefix);
+        icmp_packet[4..6].copy_from_slice(&sequence.to_be_bytes());
+        icmp_packet[6..8].copy_from_slice(&sequence.to_be_bytes());
+        icmp_packet[8..16].copy_from_slice(&timestamp.to_be_bytes());
 
         let buf = &icmp_packet as *const u8 as *const libc::c_void;
         let result = unsafe {
@@ -58,7 +63,10 @@ impl PingProtocol {
         Ok(())
     }
 
-    pub fn recv(&self) -> Result<Option<SocketAddr>, Box<dyn std::error::Error>> {
+    pub fn recv(
+        &self,
+        timeout: std::time::Duration,
+    ) -> Result<Option<PingResponse>, Box<dyn std::error::Error>> {
         let epoll_fd = unsafe { libc::epoll_create1(0) };
         if epoll_fd < 0 {
             return Err(std::io::Error::last_os_error())?;
@@ -74,7 +82,13 @@ impl PingProtocol {
         unsafe {
             let mut evs: [libc::epoll_event; 1] = std::mem::zeroed();
 
-            let result = libc::epoll_wait(epoll_fd, evs.as_mut_ptr(), evs.len() as i32, 1000);
+            let timeout_millis = timeout.as_millis();
+            let result = libc::epoll_wait(
+                epoll_fd,
+                evs.as_mut_ptr(),
+                evs.len() as i32,
+                timeout_millis as i32,
+            );
             if result < 0 {
                 let err = std::io::Error::last_os_error();
                 libc::close(epoll_fd);
@@ -107,10 +121,20 @@ impl PingProtocol {
                 addrlen_ptr,
             )
         };
+        let rx_time = std::time::Instant::now();
+        let identifier = u16::from_be_bytes(buf[4..6].try_into().unwrap());
+        let sequence = u16::from_be_bytes(buf[6..8].try_into().unwrap());
+        let timestamp = u64::from_be_bytes(buf[8..16].try_into().unwrap());
         if recvfrom_result < 0 {
             return Err(std::io::Error::last_os_error())?;
         }
-        Ok(Some(addr.try_into()?))
+        Ok(Some((
+            addr.try_into()?,
+            identifier,
+            sequence,
+            timestamp,
+            rx_time,
+        )))
     }
 }
 
