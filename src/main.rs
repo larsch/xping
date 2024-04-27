@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         net::IpAddr::V6(v6addr) => net::SocketAddr::V6(net::SocketAddrV6::new(*v6addr, 58, 0, 0)),
     };
 
-    let interval = std::time::Duration::from_millis(250);
+    let interval = std::time::Duration::from_millis(125);
     let mut next = std::time::Instant::now();
     let ping_protocol = ping::PingProtocol::new(target_sa).unwrap();
 
