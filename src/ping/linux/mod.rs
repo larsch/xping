@@ -59,6 +59,38 @@ impl PingProtocol {
     }
 
     pub fn recv(&self) -> Result<Option<SocketAddr>, Box<dyn std::error::Error>> {
+        let epoll_fd = unsafe { libc::epoll_create1(0) };
+        if epoll_fd < 0 {
+            return Err(std::io::Error::last_os_error())?;
+        }
+        let mut ev = libc::epoll_event {
+            events: libc::EPOLLIN as u32,
+            u64: self.socket as u64,
+        };
+        if unsafe { libc::epoll_ctl(epoll_fd, libc::EPOLL_CTL_ADD, self.socket, &mut ev) } < 0 {
+            return Err(std::io::Error::last_os_error())?;
+        }
+
+        unsafe {
+            let mut evs: [libc::epoll_event; 1] = std::mem::zeroed();
+
+            let result = libc::epoll_wait(epoll_fd, evs.as_mut_ptr(), evs.len() as i32, 1000);
+            if result < 0 {
+                let err = std::io::Error::last_os_error();
+                libc::close(epoll_fd);
+                return Err(err)?;
+            }
+
+            if result == 0 {
+                libc::close(epoll_fd);
+                return Ok(None);
+            }
+        }
+
+        unsafe {
+            libc::close(epoll_fd);
+        }
+
         let mut buf = [0u8; 65536];
         let buf_ptr = &mut buf as *mut u8 as *mut libc::c_void;
         let flags = 0;
