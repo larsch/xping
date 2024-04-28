@@ -4,6 +4,26 @@ use crossterm::QueueableCommand;
 
 use std::{env, io::Write, net, time::Instant};
 
+#[derive(clap::Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Number of packets per second
+    #[arg(short, long)]
+    rate: Option<u32>,
+
+    /// Packet interval in milliseconds
+    #[arg(short, long, default_value_t = 1000)]
+    interval: u64,
+
+    /// Number of attempts (0 or none for infinite)
+    #[arg(short, long)]
+    attempts: Option<u32>,
+
+    /// Address or name of target host
+    #[arg()]
+    target: String,
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let target = env::args().nth(1).unwrap();
     let target = dns_lookup::lookup_host(&target).unwrap();
@@ -15,7 +35,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let interval = std::time::Duration::from_millis(125);
     let mut next = std::time::Instant::now();
-    let ping_protocol = ping::PingProtocol::new(target_sa).unwrap();
+    let mut ping_protocol = ping::PingProtocol::new(target_sa)?;
 
     let mut sequence = 0u16;
 
@@ -40,6 +60,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let response = ping_protocol.recv(time_left).unwrap();
             match response {
                 Some((_addr, _identifier, rx_sequence, timestamp, rx_time)) => {
+                    // println!("rx_time = {:?}", rx_time);
+                    // println!("timestamp = {:?}", timestamp);
                     let nanos = (rx_time - time_reference).as_nanos() as u64 - timestamp;
                     let round_trip_time = std::time::Duration::from_nanos(nanos);
                     let relative_sequence = sequence - rx_sequence;
@@ -60,6 +82,4 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-
-    // Rest of the code...
 }

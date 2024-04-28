@@ -1,8 +1,18 @@
-mod sockaddr;
-
 use std::net::SocketAddr;
 
-use sockaddr::SockAddr;
+use super::sockaddr::SockAddr;
+
+pub mod types {
+    pub use libc::sockaddr;
+    pub use libc::sockaddr_in;
+    pub use libc::sockaddr_in6;
+    pub const AF_INET: u16 = libc::AF_INET as u16;
+    pub const AF_INET6: u16 = libc::AF_INET6 as u16;
+    pub type AddressFamily = u16;
+    pub use super::FromOctets;
+    pub use libc::in6_addr;
+    pub use libc::in_addr;
+}
 
 pub struct PingProtocol {
     socket: i32,
@@ -10,7 +20,25 @@ pub struct PingProtocol {
     target_sa: SocketAddr,
 }
 
-type PingResponse = (SocketAddr, u16, u16, u64, std::time::Instant);
+pub trait FromOctets {
+    fn from_octets(octets: &[u8]) -> Self;
+}
+
+impl FromOctets for libc::in_addr {
+    fn from_octets(octets: &[u8]) -> Self {
+        let mut addr = libc::in_addr { s_addr: 0 };
+        addr.s_addr = u32::from_be_bytes(octets.try_into().unwrap()).to_be();
+        addr
+    }
+}
+
+impl FromOctets for libc::in6_addr {
+    fn from_octets(octets: &[u8]) -> Self {
+        let mut addr = libc::in6_addr { s6_addr: [0; 16] };
+        addr.s6_addr.copy_from_slice(octets);
+        addr
+    }
+}
 
 impl PingProtocol {
     pub fn new(target: SocketAddr) -> Result<Self, Box<dyn std::error::Error>> {
@@ -35,7 +63,7 @@ impl PingProtocol {
     }
 
     pub fn send(&self, sequence: u16, timestamp: u64) -> Result<(), std::io::Error> {
-        let mut icmp_packet: [u8; 192] = [0; 192];
+        let mut icmp_packet = [0u8; 64];
         let code = match self.target_sa {
             SocketAddr::V4(_) => 0x08,
             SocketAddr::V6(_) => 0x80,
@@ -47,6 +75,17 @@ impl PingProtocol {
         icmp_packet[8..16].copy_from_slice(&timestamp.to_be_bytes());
 
         let buf = &icmp_packet as *const u8 as *const libc::c_void;
+        println!("socket = {}", self.socket);
+        println!("buf = {:?}", &icmp_packet);
+        println!("icmp_packet.len() = {}", icmp_packet.len());
+        println!("self.target.family = {:?}", self.target.sa_family());
+        println!("self.target.as_ref() = {:?}", unsafe {
+            &self.target.sin6.sin6_addr.s6_addr
+        });
+        println!(
+            "std::mem::size_of::<SockAddr>() = {}",
+            std::mem::size_of::<SockAddr>() as u32
+        );
         let result = unsafe {
             libc::sendto(
                 self.socket,
@@ -66,7 +105,7 @@ impl PingProtocol {
     pub fn recv(
         &self,
         timeout: std::time::Duration,
-    ) -> Result<Option<PingResponse>, Box<dyn std::error::Error>> {
+    ) -> Result<Option<super::PingResponse>, Box<dyn std::error::Error>> {
         let epoll_fd = unsafe { libc::epoll_create1(0) };
         if epoll_fd < 0 {
             return Err(std::io::Error::last_os_error())?;
@@ -143,5 +182,26 @@ impl Drop for PingProtocol {
         unsafe {
             libc::close(self.socket);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::FromOctets;
+    #[test]
+    fn test_from_octets() {
+        let octets = [192, 168, 1, 1];
+        let addr = libc::in_addr::from_octets(&octets);
+        assert_eq!(addr.s_addr, 0xc0a80101_u32.to_be());
+    }
+
+    #[test]
+    fn test_from_octets_v6() {
+        let octets = [
+            0x20, 0x01, 0x0d, 0xb8, 0x85, 0xa3, 0x08, 0x00, 0x02, 0x20, 0x6c, 0x34, 0x00, 0x00,
+            0x00, 0x01,
+        ];
+        let addr = libc::in6_addr::from_octets(&octets);
+        assert_eq!(addr.s6_addr, octets);
     }
 }
