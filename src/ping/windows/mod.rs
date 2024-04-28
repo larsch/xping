@@ -121,96 +121,95 @@ impl PingProtocol {
         unsafe {
             let mut wsadata = WinSock::WSADATA::default();
             WinSock::WSAStartup(0x0202, &mut wsadata);
+        }
 
-            // let icmp = WinSock::getprotobyname(s!("icmp"));
-            // let icmp_proto = (*icmp).p_proto;
+        // let icmp = WinSock::getprotobyname(s!("icmp"));
+        // let icmp_proto = (*icmp).p_proto;
 
-            let family = match target {
-                SocketAddr::V4(_) => WinSock::AF_INET,
-                SocketAddr::V6(_) => WinSock::AF_INET6,
-            };
+        let family = match target {
+            SocketAddr::V4(_) => WinSock::AF_INET,
+            SocketAddr::V6(_) => WinSock::AF_INET6,
+        };
 
-            let proto = match target {
-                SocketAddr::V4(_) => WinSock::IPPROTO_ICMP,
-                SocketAddr::V6(_) => WinSock::IPPROTO_ICMPV6,
-            };
+        let proto = match target {
+            SocketAddr::V4(_) => WinSock::IPPROTO_ICMP,
+            SocketAddr::V6(_) => WinSock::IPPROTO_ICMPV6,
+        };
 
-            let socket = WinSock::WSASocketW(
+        let socket = unsafe {
+            WinSock::WSASocketW(
                 family.0 as i32,
                 WinSock::SOCK_RAW.0,
                 proto.0,
                 None,
                 0,
                 WinSock::WSA_FLAG_OVERLAPPED,
-            );
+            )
+        };
 
-            assert!(socket != WinSock::INVALID_SOCKET);
+        assert!(socket != WinSock::INVALID_SOCKET);
 
-            // let last_error = WinSock::WSAGetLastError();
-            // println!("{:?}", last_error);
+        let winping = PingProtocol {
+            socket,
+            // send_to_overlapped: vec![],
+            overlapped_recvfrom: Default::default(),
+            recv_buffer: [0u8; 1500],
+            target,
+            overlapped_addr: Default::default(),
+        };
 
-            // println!("{:?}", socket);
-            let winping = PingProtocol {
-                socket,
-                // send_to_overlapped: vec![],
-                overlapped_recvfrom: Default::default(),
-                recv_buffer: [0u8; 1500],
-                target,
-                overlapped_addr: Default::default(),
-            };
-
-            Ok(winping)
-        }
+        Ok(winping)
     }
 
     pub fn send(&mut self, sequence: u16, timestamp: u64) -> Result<(), std::io::Error> {
+        let mut packet16 = [0u16; 16];
+        let packet: &mut [u8; 32] = unsafe { std::mem::transmute(&mut packet16) };
+        let identifier = sequence;
+        let code = match self.target {
+            SocketAddr::V4(_) => 8,
+            SocketAddr::V6(_) => 128,
+        };
+        packet[0] = code; // echo request
+        packet[1] = 0;
+        packet[2] = 0; // checksum msb
+        packet[3] = 0; // checksum lsb
+        packet[4..6].copy_from_slice(&identifier.to_be_bytes());
+        packet[6..8].copy_from_slice(&sequence.to_be_bytes());
+
+        // Insert timestamp
+        packet[8..16].copy_from_slice(&timestamp.to_be_bytes());
+
+        // Create PSTR/WSABUF for icmp packet
+        let packet_pstr = PSTR::from_raw(packet.as_mut_ptr());
+        let packet_wsabuf = [WinSock::WSABUF {
+            len: packet.len() as u32,
+            buf: packet_pstr,
+        }];
+
         unsafe {
-            let mut packet16 = [0u16; 16];
-            let packet: &mut [u8; 32] = std::mem::transmute(&mut packet16);
-            let identifier = sequence;
-            let code = match self.target {
-                SocketAddr::V4(_) => 8,
-                SocketAddr::V6(_) => 128,
-            };
-            packet[0] = code; // echo request
-            packet[1] = 0;
-            packet[2] = 0; // checksum msb
-            packet[3] = 0; // checksum lsb
-            packet[4..6].copy_from_slice(&identifier.to_be_bytes());
-            packet[6..8].copy_from_slice(&sequence.to_be_bytes());
-
-            // Insert timestamp
-            packet[8..16].copy_from_slice(&timestamp.to_be_bytes());
-
-            // Create PSTR/WSABUF for icmp packet
-            let packet_pstr = PSTR::from_raw(packet.as_mut_ptr());
-            let packet_wsabuf = [WinSock::WSABUF {
-                len: 32,
-                buf: packet_pstr,
-            }];
-
             // Calculate checksum
             let data = packet16.as_mut_ptr();
-            // println!("data = {:?}", data);
-            let words = (packet.len() / 2) as isize;
+            let words = packet16.len();
             let mut checksum: u32 = 0;
             for pos in 0..words {
-                let word = *data.offset(pos);
+                let word = *data.add(pos);
                 checksum += word as u32;
             }
             checksum = (checksum & 0xFFFF) + (checksum >> 16);
             checksum = (checksum & 0xFFFF) + (checksum >> 16);
             *data.offset(1) = (checksum as u16) ^ 0xFFFF;
+        }
 
-            // println!("packet = {:?}", packet);
+        // println!("packet = {:?}", packet);
 
-            let mut bytes_sent: u32 = 0;
+        let mut bytes_sent: u32 = 0;
 
-            let target_sa: super::sockaddr::SockAddr = self.target.into();
+        let target_sa: super::sockaddr::SockAddr = self.target.into();
 
-            // println!("{:?}", target_sa.sin6.sin6_addr.u.Word);
+        // println!("{:?}", target_sa.sin6.sin6_addr.u.Word);
 
-            let result = WinSock::WSASendTo(
+        let result = unsafe {
+            WinSock::WSASendTo(
                 self.socket,
                 &packet_wsabuf,
                 Some(&mut bytes_sent),
@@ -219,50 +218,55 @@ impl PingProtocol {
                 std::mem::size_of::<super::sockaddr::SockAddr>() as i32,
                 None,
                 None,
-            );
-            match result {
-                0 => (),
-                WinSock::SOCKET_ERROR => {
-                    let err = WSAGetLastError();
-                    eprintln!("{:?}", err);
-                    eprintln!("{:?}", lookup_error(err.0 as u32).unwrap());
-
-                    panic!();
-                }
-                _ => panic!(),
+            )
+        };
+        match result {
+            0 => (),
+            WinSock::SOCKET_ERROR => {
+                let err = unsafe { WSAGetLastError() };
+                eprintln!("{:?}", err);
+                eprintln!("{:?}", lookup_error(err.0 as u32).unwrap());
+                // dbg!("packet_wsa", packet_wsabuf);
+                // let tgt: SocketAddr = target_sa.try_into().unwrap();
+                // dbg!("target_sa", tgt);
+                // dbg!("socket", self.socket);
+                // dbg!("bytes_sent", bytes_sent);
+                // dbg!("result", result);
+                panic!();
             }
-            assert!(result == 0);
-            Ok(())
+            _ => panic!(),
         }
+        assert!(result == 0);
+        Ok(())
     }
 
     pub fn recv(
         &mut self,
         timeout: Duration,
     ) -> Result<Option<super::PingResponse>, Box<dyn std::error::Error>> {
-        unsafe {
-            let recv_wsabuf = [WinSock::WSABUF {
-                len: self.recv_buffer.len() as u32,
-                buf: PSTR::from_raw(self.recv_buffer.as_mut_ptr()),
-            }];
-            let mut bytes_received = 0u32;
+        let recv_wsabuf = [WinSock::WSABUF {
+            len: self.recv_buffer.len() as u32,
+            buf: PSTR::from_raw(self.recv_buffer.as_mut_ptr()),
+        }];
+        let mut bytes_received = 0u32;
 
-            //let mut recv_sockaddr: super::sockaddr::SockAddr = std::mem::zeroed();
-            let mut recv_fromlen = std::mem::size_of::<crate::ping::sockaddr::SockAddr>() as i32;
+        //let mut recv_sockaddr: super::sockaddr::SockAddr = std::mem::zeroed();
+        let mut recv_fromlen = std::mem::size_of::<crate::ping::sockaddr::SockAddr>() as i32;
 
-            // let mut recv_sockaddr = WinSock::SOCKADDR::default();
-            // let mut recv_fromlen = std::mem::size_of::<WinSock::SOCKADDR>() as i32;
+        // let mut recv_sockaddr = WinSock::SOCKADDR::default();
+        // let mut recv_fromlen = std::mem::size_of::<WinSock::SOCKADDR>() as i32;
 
-            let mut flags = 0u32;
+        let mut flags = 0u32;
 
-            if self.overlapped_recvfrom.hEvent == HANDLE::default() {
-                // create a new overlapped operation
-                self.overlapped_recvfrom.hEvent = WinSock::WSACreateEvent().unwrap();
-                // start receive operation
-                // println!("recvfrom...");
-                // println!("self.socket = {:?}", self.socket);
-                // println!("recv_wsabuf = {:?}", recv_wsabuf);
-                let result = WinSock::WSARecvFrom(
+        if self.overlapped_recvfrom.hEvent == HANDLE::default() {
+            // create a new overlapped operation
+            self.overlapped_recvfrom.hEvent = unsafe { WinSock::WSACreateEvent() }.unwrap();
+            // start receive operation
+            // println!("recvfrom...");
+            // println!("self.socket = {:?}", self.socket);
+            // println!("recv_wsabuf = {:?}", recv_wsabuf);
+            let result = unsafe {
+                WinSock::WSARecvFrom(
                     self.socket,
                     &recv_wsabuf,
                     Some(&mut bytes_received as *mut u32),
@@ -271,46 +275,51 @@ impl PingProtocol {
                     Some(&mut recv_fromlen),
                     Some(&mut self.overlapped_recvfrom as *mut OVERLAPPED),
                     None,
-                );
+                )
+            };
 
-                match result {
-                    0 => {
-                        // The operation completed without overlap.
-                        WinSock::WSACloseEvent(self.overlapped_recvfrom.hEvent).unwrap();
-                        self.overlapped_recvfrom.hEvent = HANDLE::default();
-                        return Ok(self.complete_recv_from(
-                            self.overlapped_addr.clone().try_into()?,
-                            bytes_received as usize,
-                        ));
-                    }
-                    SOCKET_ERROR => {
-                        // The operation failed (or overlapped operation is pending)
-                        let err = WinSock::WSAGetLastError();
-                        // println!("err = {:?}", err);
-                        assert!(err == WinSock::WSA_IO_PENDING);
-                    }
-                    _ => {
-                        abort();
-                    }
+            match result {
+                0 => {
+                    // The operation completed without overlap.
+                    unsafe { WinSock::WSACloseEvent(self.overlapped_recvfrom.hEvent) }.unwrap();
+                    self.overlapped_recvfrom.hEvent = HANDLE::default();
+                    return Ok(self.complete_recv_from(
+                        self.overlapped_addr.clone().try_into()?,
+                        bytes_received as usize,
+                    ));
+                }
+                SOCKET_ERROR => {
+                    // The operation failed (or overlapped operation is pending)
+                    let err = unsafe { WinSock::WSAGetLastError() };
+                    // println!("err = {:?}", err);
+                    assert!(err == WinSock::WSA_IO_PENDING);
+                }
+                _ => {
+                    abort();
                 }
             }
+        }
 
-            let timeout = timeout.as_millis() as u32;
+        let timeout = timeout.as_millis() as u32;
 
-            // An overlapped operation has now been started
-            let rc = WinSock::WSAWaitForMultipleEvents(
+        assert!(self.overlapped_recvfrom.hEvent != HANDLE::default());
+
+        // An overlapped operation has now been started
+        let rc = unsafe {
+            WinSock::WSAWaitForMultipleEvents(
                 &[self.overlapped_recvfrom.hEvent],
                 true,
                 timeout,
                 true,
-            );
-            // println!("rc = {:?}", rc);
-            if rc.0 == WinSock::WSA_WAIT_TIMEOUT {
-                return Ok(None);
-            }
-            // println!("wfm: {:?}", rc);
-            assert!(rc.0 != WinSock::WSA_WAIT_FAILED);
-            let mut flags = 0u32;
+            )
+        };
+        if rc.0 == WinSock::WSA_WAIT_TIMEOUT {
+            return Ok(None);
+        }
+        assert!(rc.0 != WinSock::WSA_WAIT_FAILED);
+
+        let mut flags = 0u32;
+        unsafe {
             WinSock::WSAGetOverlappedResult(
                 self.socket,
                 &self.overlapped_recvfrom,
@@ -318,16 +327,16 @@ impl PingProtocol {
                 false,
                 &mut flags as *mut u32,
             )
-            .unwrap();
-
-            WSACloseEvent(self.overlapped_recvfrom.hEvent).unwrap();
-            self.overlapped_recvfrom.hEvent = HANDLE::default();
-            // println!("bytes_received = {:?}", bytes_received);
-            // println!("{:?}", self.overlapped_addr.as_ref().sa_family);
-            let sa: Result<SocketAddr, String> = self.overlapped_addr.clone().try_into();
-            // println!("recv_sockaddr = {:?}", sa);
-            Ok(self.complete_recv_from(sa.unwrap(), bytes_received as usize))
         }
+        .unwrap();
+
+        unsafe { WSACloseEvent(self.overlapped_recvfrom.hEvent) }.unwrap();
+        self.overlapped_recvfrom.hEvent = HANDLE::default();
+        // println!("bytes_received = {:?}", bytes_received);
+        // println!("{:?}", self.overlapped_addr.as_ref().sa_family);
+        let sa: Result<SocketAddr, String> = self.overlapped_addr.clone().try_into();
+        // println!("recv_sockaddr = {:?}", sa);
+        Ok(self.complete_recv_from(sa.unwrap(), bytes_received as usize))
     }
 
     fn complete_recv_from(
