@@ -9,7 +9,7 @@ pub mod types {
     pub const AF_INET: u16 = libc::AF_INET as u16;
     pub const AF_INET6: u16 = libc::AF_INET6 as u16;
     pub type AddressFamily = u16;
-    pub use super::FromOctets;
+    pub use super::{AsIpv4Addr, AsIpv6Addr, FromOctets};
     pub use libc::in6_addr;
     pub use libc::in_addr;
 }
@@ -37,6 +37,26 @@ impl FromOctets for libc::in6_addr {
         let mut addr = libc::in6_addr { s6_addr: [0; 16] };
         addr.s6_addr.copy_from_slice(octets);
         addr
+    }
+}
+
+pub trait AsIpv4Addr {
+    fn as_ipv4addr(&self) -> std::net::Ipv4Addr;
+}
+
+impl AsIpv4Addr for libc::in_addr {
+    fn as_ipv4addr(&self) -> std::net::Ipv4Addr {
+        std::net::Ipv4Addr::from(self.s_addr.to_be())
+    }
+}
+
+pub trait AsIpv6Addr {
+    fn as_ipv6addr(&self) -> std::net::Ipv6Addr;
+}
+
+impl AsIpv6Addr for libc::in6_addr {
+    fn as_ipv6addr(&self) -> std::net::Ipv6Addr {
+        std::net::Ipv6Addr::from(self.s6_addr)
     }
 }
 

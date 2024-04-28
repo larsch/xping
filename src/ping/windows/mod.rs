@@ -1,6 +1,6 @@
 use std::{
     ffi::c_void,
-    net::SocketAddr,
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     process::abort,
     time::{Duration, Instant},
 };
@@ -15,7 +15,7 @@ pub mod types {
     pub use WinSock::SOCKADDR_IN as sockaddr_in;
     pub use WinSock::SOCKADDR_IN6 as sockaddr_in6;
     pub type AddressFamily = WinSock::ADDRESS_FAMILY;
-    pub use super::FromOctets;
+    pub use super::{AsIpv4Addr, AsIpv6Addr, FromOctets};
 }
 
 pub trait FromOctets {
@@ -44,6 +44,37 @@ impl FromOctets for WinSock::IN6_ADDR {
                 Byte: octets.try_into().unwrap(),
             },
         }
+    }
+}
+
+pub trait AsIpv4Addr {
+    fn as_ipv4addr(&self) -> Ipv4Addr;
+}
+
+impl AsIpv4Addr for WinSock::IN_ADDR {
+    fn as_ipv4addr(&self) -> Ipv4Addr {
+        let octets = unsafe { self.S_un.S_un_b };
+        Ipv4Addr::new(octets.s_b1, octets.s_b2, octets.s_b3, octets.s_b4)
+    }
+}
+
+pub trait AsIpv6Addr {
+    fn as_ipv6addr(&self) -> Ipv6Addr;
+}
+
+impl AsIpv6Addr for WinSock::IN6_ADDR {
+    fn as_ipv6addr(&self) -> Ipv6Addr {
+        let a: [u16; 8] = unsafe { self.u.Word };
+        Ipv6Addr::new(
+            u16::from_be(a[0]),
+            u16::from_be(a[1]),
+            u16::from_be(a[2]),
+            u16::from_be(a[3]),
+            u16::from_be(a[4]),
+            u16::from_be(a[5]),
+            u16::from_be(a[6]),
+            u16::from_be(a[7]),
+        )
     }
 }
 

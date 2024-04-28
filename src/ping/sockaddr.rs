@@ -1,4 +1,4 @@
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
+use std::net::{SocketAddr, SocketAddrV4, SocketAddrV6};
 
 #[cfg(target_os = "linux")]
 use crate::ping::linux::types::*;
@@ -53,36 +53,21 @@ impl TryFrom<SockAddr> for SocketAddr {
         match value.sa_family() {
             AF_INET => {
                 let sockaddr_in: &sockaddr_in = unsafe { &value.sin };
-
-                #[cfg(target_os = "windows")]
-                let s_addr = u32::from_be(unsafe { sockaddr_in.sin_addr.S_un.S_addr });
-                #[cfg(target_os = "linux")]
-                let s_addr = u32::from_be(sockaddr_in.sin_addr.s_addr);
-
-                let ip = Ipv4Addr::new(
-                    ((s_addr >> 24) & 0xFF) as u8,
-                    ((s_addr >> 16) & 0xFF) as u8,
-                    ((s_addr >> 8) & 0xFF) as u8,
-                    (s_addr & 0xFF) as u8,
-                );
                 let port = u16::from_be(sockaddr_in.sin_port);
-                Ok(SocketAddr::V4(SocketAddrV4::new(ip, port)))
+                Ok(SocketAddr::V4(SocketAddrV4::new(
+                    sockaddr_in.sin_addr.as_ipv4addr(),
+                    port,
+                )))
             }
             AF_INET6 => {
                 let sockaddr_in6 = unsafe { &value.sin6 };
-                #[cfg(target_os = "windows")]
-                let a: [u16; 8] = unsafe { sockaddr_in6.sin6_addr.u.Word };
-                #[cfg(target_os = "linux")]
-                let a: [u16; 8] = unsafe { std::mem::transmute(sockaddr_in6.sin6_addr.s6_addr) };
-                let a: [u16; 8] = a
-                    .iter()
-                    .map(|&x| u16::from_be(x))
-                    .collect::<Vec<u16>>()
-                    .try_into()
-                    .unwrap();
-                let ip = Ipv6Addr::new(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
                 let port = u16::from_be(sockaddr_in6.sin6_port);
-                Ok(SocketAddr::V6(SocketAddrV6::new(ip, port, 0, 0)))
+                Ok(SocketAddr::V6(SocketAddrV6::new(
+                    sockaddr_in6.sin6_addr.as_ipv6addr(),
+                    port,
+                    0,
+                    0,
+                )))
             }
             _ => Err("Unhandled address family".to_owned()),
         }
@@ -125,11 +110,10 @@ impl From<SocketAddr> for SockAddr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(target_os = "windows")]
-    use windows::Win32::Networking::WinSock;
+    use std::net::{Ipv4Addr, Ipv6Addr};
 
     #[test]
-    fn test_socketaddr_to_sockaddr() {
+    fn test_sockaddr_from() {
         // Test IPv4 address
         let ip = Ipv4Addr::new(127, 0, 0, 1);
         let port = 8443;
@@ -138,10 +122,7 @@ mod tests {
         unsafe {
             assert_eq!(sockaddr.sa.sa_family, AF_INET);
             assert_eq!(sockaddr.sin.sin_port, port.to_be());
-            #[cfg(target_os = "windows")]
-            assert_eq!(sockaddr.sin.sin_addr.S_un.S_addr, u32::from(ip).to_be());
-            #[cfg(target_os = "linux")]
-            assert_eq!(sockaddr.sin.sin_addr.s_addr, u32::from(ip).to_be());
+            assert_eq!(sockaddr.sin.sin_addr.as_ipv4addr(), ip);
         }
 
         // Test IPv6 address
@@ -152,38 +133,18 @@ mod tests {
         unsafe {
             assert_eq!(sockaddr.sa_family(), AF_INET6);
             assert_eq!(sockaddr.sin6.sin6_port, port.to_be());
-            #[cfg(target_os = "windows")]
-            assert_eq!(
-                sockaddr.sin6.sin6_addr.u.Byte,
-                [0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8]
-            );
-            #[cfg(target_os = "linux")]
-            assert_eq!(sockaddr.sin6.sin6_addr.s6_addr, ip.octets());
+            assert_eq!(sockaddr.sin6.sin6_addr.as_ipv6addr(), ip);
         }
     }
 
     #[test]
-    fn test_sockaddr_to_socketaddr() {
+    fn test_sockaddr_tryinto() {
         // Test IPv4 address
         let sockaddr = SockAddr {
             sin: sockaddr_in {
                 sin_family: AF_INET,
                 sin_port: 8443u16.to_be(),
-                #[cfg(target_os = "windows")]
-                sin_addr: WinSock::IN_ADDR {
-                    S_un: WinSock::IN_ADDR_0 {
-                        S_un_b: WinSock::IN_ADDR_0_0 {
-                            s_b1: 127,
-                            s_b2: 0,
-                            s_b3: 0,
-                            s_b4: 1,
-                        },
-                    },
-                },
-                #[cfg(target_os = "linux")]
-                sin_addr: libc::in_addr {
-                    s_addr: u32::from(Ipv4Addr::new(127, 0, 0, 1)).to_be(),
-                },
+                sin_addr: in_addr::from_octets(&[127, 0, 0, 1]),
                 ..unsafe { std::mem::zeroed() }
             },
         };
@@ -199,16 +160,7 @@ mod tests {
             sin6: sockaddr_in6 {
                 sin6_family: AF_INET6,
                 sin6_port: 8080u16.to_be(),
-                #[cfg(target_os = "windows")]
-                sin6_addr: WinSock::IN6_ADDR {
-                    u: WinSock::IN6_ADDR_0 {
-                        Byte: [0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8],
-                    },
-                },
-                #[cfg(target_os = "linux")]
-                sin6_addr: libc::in6_addr {
-                    s6_addr: [0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8],
-                },
+                sin6_addr: in6_addr::from_octets(&[0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8]),
                 ..unsafe { std::mem::zeroed() }
             },
         };
