@@ -92,11 +92,13 @@ use windows::{
 
 pub struct PingProtocol {
     socket: WinSock::SOCKET,
+    send_packet: Vec<u8>,
     recv_overlapped: OVERLAPPED,
     recv_from: super::sockaddr::SockAddr,
     recv_fromlen: i32,
     recv_buffer: [u8; 1500],
     target: SocketAddr,
+    length: usize,
 }
 
 impl Drop for PingProtocol {
@@ -116,7 +118,7 @@ impl Drop for PingProtocol {
 }
 
 impl PingProtocol {
-    pub fn new(target: SocketAddr) -> Result<Self, String> {
+    pub fn new(target: SocketAddr, length: usize) -> Result<Self, String> {
         unsafe {
             let mut wsadata = WinSock::WSADATA::default();
             let result = WinSock::WSAStartup(0x0202, &mut wsadata);
@@ -147,17 +149,21 @@ impl PingProtocol {
 
         Ok(PingProtocol {
             socket,
+            send_packet: Vec::with_capacity(8 + length),
             recv_overlapped: Default::default(),
             recv_buffer: [0u8; 1500],
             target,
             recv_from: Default::default(),
             recv_fromlen: 0,
+            length,
         })
     }
 
     pub fn send(&mut self, sequence: u16, timestamp: u64) -> Result<(), std::io::Error> {
-        let mut packet16 = [0u16; 16];
-        let packet: &mut [u8; 32] = unsafe { std::mem::transmute(&mut packet16) };
+        // let mut packet16 = [0u16; self.length];
+        // let packet: &mut [u8; 32] = unsafe { std::mem::transmute(&mut packet16) };
+        self.send_packet.resize(8 + self.length, 0u8);
+        let packet = &mut self.send_packet;
         let identifier = sequence;
         let code = match self.target {
             SocketAddr::V4(_) => 8,
@@ -173,21 +179,34 @@ impl PingProtocol {
         // Insert timestamp
         packet[8..16].copy_from_slice(&timestamp.to_be_bytes());
 
+        for (i, item) in packet.iter_mut().enumerate().skip(16) {
+            *item = i as u8;
+        }
+
+        // packet[self.length - 1] ^= 0xffu8;
+
         // Create PSTR/WSABUF for icmp packet
         let packet_pstr = PSTR::from_raw(packet.as_mut_ptr());
         let packet_wsabuf = [WinSock::WSABUF {
-            len: packet.len() as u32,
+            len: (self.length + 8) as u32,
             buf: packet_pstr,
         }];
 
         unsafe {
             // Calculate checksum
+            let packet16: &mut [u8] = self.send_packet.as_mut_slice();
+            let packet16: &mut [u16] = std::mem::transmute(packet16);
+            let len = self.send_packet.len();
+            let word_count = len / 2;
+
             let data = packet16.as_mut_ptr();
-            let words = packet16.len();
             let mut checksum: u32 = 0;
-            for pos in 0..words {
+            for pos in 0..word_count {
                 let word = *data.add(pos);
                 checksum += word as u32;
+            }
+            if len % 2 == 1 {
+                checksum += self.send_packet[len - 1] as u32;
             }
             checksum = (checksum & 0xFFFF) + (checksum >> 16);
             checksum = (checksum & 0xFFFF) + (checksum >> 16);
