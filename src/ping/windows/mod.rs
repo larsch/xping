@@ -112,7 +112,7 @@ impl Drop for PingProtocol {
         unsafe {
             println!("Closing socket");
             let close_result = WinSock::closesocket(self.socket);
-            assert!(close_result == 0);
+            assert!(close_result == 0, "Failed to close socket");
         }
     }
 }
@@ -121,7 +121,8 @@ impl PingProtocol {
     pub fn new(target: SocketAddr, length: usize) -> Result<Self, String> {
         unsafe {
             let mut wsadata = WinSock::WSADATA::default();
-            let result = WinSock::WSAStartup(0x0202, &mut wsadata);
+            const VERSION_REQUESTED: u16 = 0x0202;
+            let result = WinSock::WSAStartup(VERSION_REQUESTED, &mut wsadata);
             if result != 0 {
                 return Err(last_wsa_error());
             }

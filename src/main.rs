@@ -91,6 +91,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sequence: u16,
         timeout: std::time::Instant,
         received: bool,
+        width: usize,
     }
 
     let mut entries = VecDeque::new();
@@ -99,9 +100,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if attempts_left > 0 {
             let timestamp = time_reference.elapsed().as_nanos() as u64;
             ping_protocol.send(sequence, timestamp).unwrap();
+            let mut width = 0;
 
             match args.display_mode {
-                DisplayMode::Classic => println!("{}: icmp_seq={}", target_str, sequence),
+                DisplayMode::Classic => {
+                    let output = format!("{}: icmp_seq={}", target_str, sequence);
+                    width = output.len();
+                    println!("{}", output);
+                }
                 DisplayMode::Char => {
                     if sequence % columns == columns - 1 {
                         println!(".");
@@ -118,6 +124,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 sequence,
                 timeout: std::time::Instant::now() + std::time::Duration::from_millis(args.timeout),
                 received: false,
+                width,
             });
             sequence += 1;
             next_send += interval;
@@ -140,13 +147,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         DisplayMode::Classic => {
                             stdout.queue(crossterm::cursor::SavePosition)?;
                             stdout.queue(crossterm::cursor::MoveUp(relative_sequence))?;
-                            let digits = match entry.sequence {
-                                0 => 1,
-                                n => (n as f64).log10() as u16 + 1,
-                            };
-                            stdout.queue(crossterm::cursor::MoveRight(
-                                12 + target_str.len() as u16 + digits,
-                            ))?;
+                            stdout.queue(crossterm::cursor::MoveRight(entry.width as u16 + 1))?;
                             print!("timeout");
                             stdout.queue(crossterm::cursor::RestorePosition)?;
                             stdout.flush()?;
@@ -159,17 +160,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             stdout.queue(crossterm::cursor::SavePosition)?;
                             if target_row < current_row {
                                 stdout
-                                    .queue(crossterm::cursor::MoveUp(current_row - target_row))
-                                    .unwrap();
+                                    .queue(crossterm::cursor::MoveUp(current_row - target_row))?;
                             }
                             if target_col < current_col {
                                 stdout
-                                    .queue(crossterm::cursor::MoveLeft(current_col - target_col))
-                                    .unwrap();
+                                    .queue(crossterm::cursor::MoveLeft(current_col - target_col))?;
                             } else if target_col > current_col {
-                                stdout
-                                    .queue(crossterm::cursor::MoveRight(target_col - current_col))
-                                    .unwrap();
+                                stdout.queue(crossterm::cursor::MoveRight(
+                                    target_col - current_col,
+                                ))?;
                             }
                             stdout.queue(crossterm::style::SetForegroundColor(
                                 crossterm::style::Color::Red,
