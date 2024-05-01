@@ -3,10 +3,10 @@ mod ping;
 use clap::Parser;
 use crossterm::QueueableCommand;
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     fmt::{self, Display},
     io::Write,
-    net,
+    net::{self, IpAddr},
     time::Instant,
 };
 
@@ -15,6 +15,7 @@ enum DisplayMode {
     #[default]
     Classic,
     Char,
+    Dumb,
 }
 
 impl Display for DisplayMode {
@@ -52,7 +53,192 @@ struct Args {
 
     /// Display mode
     #[arg(short, long, default_value = "classic")]
-    display_mode: DisplayMode,
+    display: DisplayMode,
+}
+
+trait DisplayModeTrait {
+    fn new(columns: u16, rows: u16) -> Self
+    where
+        Self: Sized;
+    fn display_send(
+        &mut self,
+        target: &IpAddr,
+        length: usize,
+        sequence: u64,
+    ) -> std::io::Result<()>;
+    fn display_receive(
+        &mut self,
+        sequence: u64,
+        round_trip_time: std::time::Duration,
+    ) -> std::io::Result<()>;
+    fn display_timeout(&mut self, sequence: u64) -> std::io::Result<()>;
+}
+
+struct ClassicDisplayMode {
+    position: u64,
+    widths: HashMap<u64, usize>,
+    stdout: std::io::Stdout,
+}
+
+impl ClassicDisplayMode {
+    fn display_outcome(&mut self, sequence: u64, outcome: &str) -> std::io::Result<()> {
+        let relative_sequence = self.position - sequence;
+        let width = self.widths.remove(&sequence).unwrap();
+        self.stdout.queue(crossterm::cursor::SavePosition)?;
+        self.stdout
+            .queue(crossterm::cursor::MoveUp(relative_sequence as u16))?;
+        self.stdout
+            .queue(crossterm::cursor::MoveRight(width as u16 + 1))?;
+        print!("{}", outcome);
+        self.stdout.queue(crossterm::cursor::RestorePosition)?;
+        self.stdout.flush()
+    }
+}
+
+impl DisplayModeTrait for ClassicDisplayMode {
+    fn new(_columns: u16, _rows: u16) -> Self {
+        ClassicDisplayMode {
+            position: 0,
+            widths: HashMap::new(),
+            stdout: std::io::stdout(),
+        }
+    }
+
+    fn display_send(
+        &mut self,
+        target: &IpAddr,
+        length: usize,
+        sequence: u64,
+    ) -> std::io::Result<()> {
+        let output = format!("{} bytes for {}: icmp_seq={}", length, target, sequence);
+        self.widths.insert(sequence, output.len());
+        println!("{}", output);
+        self.position = sequence + 1;
+        Ok(())
+    }
+
+    fn display_receive(
+        &mut self,
+        sequence: u64,
+        round_trip_time: std::time::Duration,
+    ) -> std::io::Result<()> {
+        self.display_outcome(sequence, &format!("time={:?}", round_trip_time))
+    }
+
+    fn display_timeout(&mut self, sequence: u64) -> std::io::Result<()> {
+        self.display_outcome(sequence, "timeout")
+    }
+}
+
+struct DumbDisplayMode;
+
+impl DisplayModeTrait for DumbDisplayMode {
+    fn new(_columns: u16, _rows: u16) -> Self {
+        DumbDisplayMode {}
+    }
+    fn display_send(
+        &mut self,
+        target: &IpAddr,
+        _length: usize,
+        _sequence: u64,
+    ) -> std::io::Result<()> {
+        Ok(println!(
+            "send {} bytes to {} with sequence {}",
+            _length, target, _sequence
+        ))
+    }
+
+    fn display_receive(
+        &mut self,
+        _sequence: u64,
+        _round_trip_time: std::time::Duration,
+    ) -> std::io::Result<()> {
+        Ok(println!(
+            "received response for sequence {} in {:?}",
+            _sequence, _round_trip_time
+        ))
+    }
+
+    fn display_timeout(&mut self, _sequence: u64) -> std::io::Result<()> {
+        Ok(println!("timeout for sequence {}", _sequence))
+    }
+}
+
+struct CharDisplayMode {
+    columns: u64,
+    position: u64,
+    stdout: std::io::Stdout,
+}
+
+impl CharDisplayMode {
+    fn display_outcome(
+        &mut self,
+        sequence: u64,
+        outcome: &str,
+        color: crossterm::style::Color,
+    ) -> std::io::Result<()> {
+        let current_row = self.position / self.columns;
+        let target_row = sequence / self.columns;
+        let current_col = self.position % self.columns;
+        let target_col = sequence % self.columns;
+        // println!("{} {} {} {}", current_row, current_col, target_row, target_col);
+        self.stdout.queue(crossterm::cursor::SavePosition)?;
+        if target_row < current_row {
+            self.stdout
+                .queue(crossterm::cursor::MoveUp((current_row - target_row) as u16))?;
+        }
+        if target_col < current_col {
+            self.stdout.queue(crossterm::cursor::MoveLeft(
+                (current_col - target_col) as u16,
+            ))?;
+        } else if target_col > current_col {
+            self.stdout.queue(crossterm::cursor::MoveRight(
+                (target_col - current_col) as u16,
+            ))?;
+        }
+        self.stdout
+            .queue(crossterm::style::SetForegroundColor(color))?;
+        self.stdout.write_all(outcome.as_bytes())?;
+        self.stdout.queue(crossterm::style::ResetColor)?;
+        self.stdout.queue(crossterm::cursor::RestorePosition)?;
+        self.stdout.flush()
+    }
+}
+
+impl DisplayModeTrait for CharDisplayMode {
+    fn new(columns: u16, _rows: u16) -> Self {
+        CharDisplayMode {
+            columns: columns as u64,
+            position: 0,
+            stdout: std::io::stdout(),
+        }
+    }
+    fn display_send(
+        &mut self,
+        _target: &IpAddr,
+        _length: usize,
+        sequence: u64,
+    ) -> std::io::Result<()> {
+        self.position = sequence + 1;
+        if sequence % self.columns == self.columns - 1 {
+            println!(".");
+        } else {
+            print!(".");
+        }
+        self.stdout.flush()
+    }
+
+    fn display_receive(
+        &mut self,
+        sequence: u64,
+        _round_trip_time: std::time::Duration,
+    ) -> std::io::Result<()> {
+        self.display_outcome(sequence, "o", crossterm::style::Color::Green)
+    }
+
+    fn display_timeout(&mut self, sequence: u64) -> std::io::Result<()> {
+        self.display_outcome(sequence, "x", crossterm::style::Color::Red)
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -72,51 +258,38 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut next_send = std::time::Instant::now();
     let mut ping_protocol = ping::PingProtocol::new(target_sa, args.length)?;
 
-    let mut sequence = 0u16;
+    let mut sequence = 0u64;
 
     let time_reference = Instant::now();
 
-    let mut stdout = std::io::stdout();
-
-    let target_str = target.to_string();
-
     let mut attempts_left = args.count.unwrap_or(u32::MAX);
 
-    let columns = match crossterm::terminal::size() {
-        Ok((w, _h)) => w - 1,
-        Err(_) => 78,
+    let (columns, rows) = match crossterm::terminal::size() {
+        Ok((w, h)) => (w - 1, h),
+        Err(_) => (78, 25),
     };
 
     struct Entry {
-        sequence: u16,
+        sequence: u64,
         timeout: std::time::Instant,
         received: bool,
-        width: usize,
     }
 
     let mut entries = VecDeque::new();
 
+    let mut display_mode: Box<dyn DisplayModeTrait> = match args.display {
+        DisplayMode::Classic => Box::new(ClassicDisplayMode::new(columns, rows)),
+        DisplayMode::Char => Box::new(CharDisplayMode::new(columns, rows)),
+        DisplayMode::Dumb => Box::new(DumbDisplayMode::new(columns, rows)),
+    };
+
     while attempts_left > 0 || !entries.is_empty() {
         if attempts_left > 0 {
             let timestamp = time_reference.elapsed().as_nanos() as u64;
-            ping_protocol.send(sequence, timestamp).unwrap();
-            let mut width = 0;
+            let icmp_sequence = sequence as u16;
+            ping_protocol.send(icmp_sequence, timestamp).unwrap();
 
-            match args.display_mode {
-                DisplayMode::Classic => {
-                    let output = format!("{}: icmp_seq={}", target_str, sequence);
-                    width = output.len();
-                    println!("{}", output);
-                }
-                DisplayMode::Char => {
-                    if sequence % columns == columns - 1 {
-                        println!(".");
-                    } else {
-                        print!(".");
-                    }
-                    stdout.flush()?;
-                }
-            }
+            display_mode.display_send(target, args.length, sequence)?;
 
             attempts_left -= 1;
 
@@ -124,7 +297,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 sequence,
                 timeout: std::time::Instant::now() + std::time::Duration::from_millis(args.timeout),
                 received: false,
-                width,
             });
             sequence += 1;
             next_send += interval;
@@ -140,48 +312,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     // Stop if the next entry has not yet timed out
                     break;
                 } else {
-                    // Print timeout message and remove entry
-                    let relative_sequence = sequence - entry.sequence;
-
-                    match args.display_mode {
-                        DisplayMode::Classic => {
-                            stdout.queue(crossterm::cursor::SavePosition)?;
-                            stdout.queue(crossterm::cursor::MoveUp(relative_sequence))?;
-                            stdout.queue(crossterm::cursor::MoveRight(entry.width as u16 + 1))?;
-                            print!("timeout");
-                            stdout.queue(crossterm::cursor::RestorePosition)?;
-                            stdout.flush()?;
-                        }
-                        DisplayMode::Char => {
-                            let current_row = sequence / columns;
-                            let target_row = entry.sequence / columns;
-                            let current_col = sequence % columns;
-                            let target_col = entry.sequence % columns;
-                            stdout.queue(crossterm::cursor::SavePosition)?;
-                            if target_row < current_row {
-                                stdout
-                                    .queue(crossterm::cursor::MoveUp(current_row - target_row))?;
-                            }
-                            if target_col < current_col {
-                                stdout
-                                    .queue(crossterm::cursor::MoveLeft(current_col - target_col))?;
-                            } else if target_col > current_col {
-                                stdout.queue(crossterm::cursor::MoveRight(
-                                    target_col - current_col,
-                                ))?;
-                            }
-                            stdout.queue(crossterm::style::SetForegroundColor(
-                                crossterm::style::Color::Red,
-                            ))?;
-                            stdout.write_all(b"x").unwrap();
-                            stdout.queue(crossterm::style::ResetColor)?;
-                            stdout.queue(crossterm::cursor::RestorePosition)?;
-                            stdout.flush()?;
-                        }
-                    }
-
+                    display_mode.display_timeout(entry.sequence)?;
                     entries.pop_front();
-                    // println!("{}", entries.len());
                 }
             }
 
@@ -241,51 +373,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
 
-                match args.display_mode {
-                    DisplayMode::Classic => {
-                        stdout.queue(crossterm::cursor::SavePosition)?;
-                        stdout.queue(crossterm::cursor::MoveUp(relative_sequence as u16))?;
-                        let digits = match rx_sequence {
-                            0 => 1,
-                            n => (n as f64).log10() as u16 + 1,
-                        };
-                        stdout.queue(crossterm::cursor::MoveRight(
-                            12 + target_str.len() as u16 + digits,
-                        ))?;
-                        print!("time={:?}", round_trip_time);
-                        stdout.queue(crossterm::cursor::RestorePosition)?;
-                        stdout.flush()?;
-                    }
-                    DisplayMode::Char => {
-                        let current_row = sequence / columns;
-                        let target_row = rx_sequence / columns;
-                        let current_col = sequence % columns;
-                        let target_col = rx_sequence % columns;
-                        // println!("{} {} {} {}", current_row, current_col, target_row, target_col);
-                        stdout.queue(crossterm::cursor::SavePosition)?;
-                        if target_row < current_row {
-                            stdout.queue(crossterm::cursor::MoveUp(current_row - target_row))?;
-                        }
-                        if target_col < current_col {
-                            stdout.queue(crossterm::cursor::MoveLeft(current_col - target_col))?;
-                        } else if target_col > current_col {
-                            stdout.queue(crossterm::cursor::MoveRight(target_col - current_col))?;
-                        }
-
-                        stdout.queue(crossterm::style::SetForegroundColor(
-                            crossterm::style::Color::Green,
-                        ))?;
-                        stdout.write_all(b"o").unwrap();
-                        stdout.queue(crossterm::style::ResetColor)?;
-                        stdout.queue(crossterm::cursor::RestorePosition)?;
-                        stdout.flush()?;
-                    }
-                }
-
                 if !entries.is_empty() {
                     let front_sequence = entries.front().unwrap().sequence;
                     let position = (rx_sequence as usize + 65536 - front_sequence as usize) % 65536;
                     if position <= entries.len() {
+                        let entry = &entries[position];
+                        display_mode.display_receive(entry.sequence, round_trip_time)?;
                         if position == 0 {
                             entries.pop_front();
                         } else {
