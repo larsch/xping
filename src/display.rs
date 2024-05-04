@@ -32,6 +32,7 @@ pub trait DisplayModeTrait {
         round_trip_time: std::time::Duration,
     ) -> std::io::Result<()>;
     fn display_timeout(&mut self, sequence: u64) -> std::io::Result<()>;
+    fn close(&mut self) -> std::io::Result<()>;
 }
 
 pub struct ClassicDisplayMode {
@@ -88,6 +89,10 @@ impl DisplayModeTrait for ClassicDisplayMode {
     fn display_timeout(&mut self, sequence: u64) -> std::io::Result<()> {
         self.display_outcome(sequence, "timeout")
     }
+
+    fn close(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 pub struct DumbDisplayMode;
@@ -121,6 +126,10 @@ impl DisplayModeTrait for DumbDisplayMode {
 
     fn display_timeout(&mut self, _sequence: u64) -> std::io::Result<()> {
         Ok(println!("timeout for sequence {}", _sequence))
+    }
+
+    fn close(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -198,6 +207,13 @@ impl DisplayModeTrait for CharDisplayMode {
 
     fn display_timeout(&mut self, sequence: u64) -> std::io::Result<()> {
         self.display_outcome(sequence, "x", crossterm::style::Color::Red)
+    }
+
+    fn close(&mut self) -> std::io::Result<()> {
+        if self.position % self.columns != 0 {
+            println!();
+        }
+        Ok(())
     }
 }
 
@@ -297,6 +313,13 @@ impl DisplayModeTrait for CharGraphDisplayMode {
 
     fn display_timeout(&mut self, sequence: u64) -> std::io::Result<()> {
         self.display_outcome(sequence, "?", crossterm::style::Color::Red)
+    }
+
+    fn close(&mut self) -> std::io::Result<()> {
+        if self.position % self.columns != 0 {
+            println!();
+        }
+        Ok(())
     }
 }
 

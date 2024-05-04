@@ -4,8 +4,8 @@ mod ping;
 use clap::Parser;
 use std::{
     collections::VecDeque,
-    net::{self},
-    time::Instant,
+    net,
+    time::{Duration, Instant},
 };
 
 use crate::display::DisplayModeTrait;
@@ -43,10 +43,11 @@ struct Args {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // for dur in [Duration::from_millis(1), Duration::from_millis(10), Duration::from_millis(100), Duration::from_millis(1000)] {
-    //     println!("{} -> {:?}", dur.as_millis(), latency_to_color(dur));
-    // }
-    // return Ok(());
+    let (tx, rx) = std::sync::mpsc::channel();
+    ctrlc::set_handler(move || {
+        tx.send(()).unwrap();
+    })
+    .expect("Error setting Ctrl-C handler");
 
     let args = Args::parse();
     let target = dns_lookup::lookup_host(&args.target).unwrap();
@@ -115,6 +116,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Receive loop
         loop {
+            if let Ok(()) = rx.try_recv() {
+                if attempts_left > 0 {
+                    attempts_left = 0;
+                } else {
+                    entries.clear();
+                    break;
+                }
+            }
+
             // Clean up entries that have timed out
             while !entries.is_empty() {
                 let entry = entries.front().unwrap();
@@ -149,6 +159,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let time_left = wait_until - std::time::Instant::now();
 
+            // Ensure that Ctrl-C is responsive
+            let time_left = time_left.min(Duration::from_millis(50));
+
             let response = ping_protocol.recv(time_left).unwrap();
             if let Some((_addr, _identifier, rx_sequence, tx_timestamp, rx_time)) = response {
                 let rx_timestamp = (rx_time - time_reference).as_nanos() as u64;
@@ -178,5 +191,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
+
+    display_mode.close()?;
     Ok(())
 }
