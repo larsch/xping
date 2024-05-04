@@ -18,6 +18,8 @@ pub struct PingProtocol {
     socket: i32,
     target: SockAddr,
     target_sa: SocketAddr,
+    packet: Vec<u8>,
+    length: usize,
 }
 
 pub trait FromOctets {
@@ -60,8 +62,8 @@ impl AsIpv6Addr for libc::in6_addr {
     }
 }
 
-impl PingProtocol {
-    pub fn new(target: SocketAddr) -> Result<Self, Box<dyn std::error::Error>> {
+impl super::Pinger for PingProtocol {
+    fn new(target: SocketAddr, length: usize) -> Result<Self, std::io::Error> {
         let sockaddr = SockAddr::from(target);
         let target_family = match target {
             SocketAddr::V4(_) => libc::AF_INET,
@@ -79,53 +81,52 @@ impl PingProtocol {
             socket,
             target: sockaddr,
             target_sa: target,
+            packet: vec![0u8; length + 8],
+            length,
         })
     }
 
-    pub fn send(&self, sequence: u16, timestamp: u64) -> Result<(), std::io::Error> {
-        let mut icmp_packet = [0u8; 64];
-        let code = match self.target_sa {
+    fn send(&mut self, sequence: u16, timestamp: u64) -> Result<(), std::io::Error> {
+        self.packet.resize(self.length + 8, 0u8);
+        let icmp_type = match self.target_sa {
             SocketAddr::V4(_) => 0x08,
             SocketAddr::V6(_) => 0x80,
         };
-        let icmp_prefix: [u8; 16] = [code, 0, 0, 0, 0, 1, 0, 1, 0, 1, 2, 3, 4, 5, 6, 7];
-        icmp_packet[0..16].copy_from_slice(&icmp_prefix);
-        icmp_packet[4..6].copy_from_slice(&sequence.to_be_bytes());
-        icmp_packet[6..8].copy_from_slice(&sequence.to_be_bytes());
-        icmp_packet[8..16].copy_from_slice(&timestamp.to_be_bytes());
+        let code = 0;
+        let id = sequence;
+        super::construct_icmp_packet(&mut self.packet, icmp_type, code, id, sequence, timestamp);
+        // let icmp_prefix: [u8; 16] = [icmp_type, 0, 0, 0, 0, 1, 0, 1, 0, 1, 2, 3, 4, 5, 6, 7];
+        // icmp_packet[0..16].copy_from_slice(&icmp_prefix);
+        // icmp_packet[4..6].copy_from_slice(&sequence.to_be_bytes());
+        // icmp_packet[6..8].copy_from_slice(&sequence.to_be_bytes());
+        // icmp_packet[8..16].copy_from_slice(&timestamp.to_be_bytes());
 
-        let buf = &icmp_packet as *const u8 as *const libc::c_void;
-        println!("socket = {}", self.socket);
-        println!("buf = {:?}", &icmp_packet);
-        println!("icmp_packet.len() = {}", icmp_packet.len());
-        println!("self.target.family = {:?}", self.target.sa_family());
-        println!("self.target.as_ref() = {:?}", unsafe {
-            &self.target.sin6.sin6_addr.s6_addr
-        });
-        println!(
-            "std::mem::size_of::<SockAddr>() = {}",
-            std::mem::size_of::<SockAddr>() as u32
-        );
+        let buf = self.packet.as_mut_ptr();
         let result = unsafe {
             libc::sendto(
                 self.socket,
-                buf,
-                icmp_packet.len(),
+                buf as *const libc::c_void,
+                self.packet.len(),
                 0,
                 self.target.as_ref(),
                 std::mem::size_of::<SockAddr>() as u32,
             )
         };
         if result < 0 {
-            return Err(std::io::Error::last_os_error());
+            let last_error = std::io::Error::last_os_error();
+            match last_error.kind() {
+                std::io::ErrorKind::WouldBlock => Ok(()),
+                _ => Err(last_error),
+            }
+        } else {
+            Ok(())
         }
-        Ok(())
     }
 
-    pub fn recv(
-        &self,
+    fn recv(
+        &mut self,
         timeout: std::time::Duration,
-    ) -> Result<Option<super::PingResponse>, Box<dyn std::error::Error>> {
+    ) -> Result<Option<super::IcmpResponse>, Box<dyn std::error::Error>> {
         let epoll_fd = unsafe { libc::epoll_create1(0) };
         if epoll_fd < 0 {
             return Err(std::io::Error::last_os_error())?;
@@ -135,6 +136,7 @@ impl PingProtocol {
             u64: self.socket as u64,
         };
         if unsafe { libc::epoll_ctl(epoll_fd, libc::EPOLL_CTL_ADD, self.socket, &mut ev) } < 0 {
+            unsafe { libc::close(epoll_fd) };
             return Err(std::io::Error::last_os_error())?;
         }
 
@@ -149,9 +151,12 @@ impl PingProtocol {
                 timeout_millis as i32,
             );
             if result < 0 {
-                let err = std::io::Error::last_os_error();
                 libc::close(epoll_fd);
-                return Err(err)?;
+                let last_error = std::io::Error::last_os_error();
+                return match last_error.kind() {
+                    std::io::ErrorKind::Interrupted => Ok(None),
+                    _ => Err(last_error)?,
+                };
             }
 
             if result == 0 {
@@ -180,20 +185,16 @@ impl PingProtocol {
                 addrlen_ptr,
             )
         };
-        let rx_time = std::time::Instant::now();
-        let identifier = u16::from_be_bytes(buf[4..6].try_into().unwrap());
-        let sequence = u16::from_be_bytes(buf[6..8].try_into().unwrap());
-        let timestamp = u64::from_be_bytes(buf[8..16].try_into().unwrap());
+        let rxtime = std::time::Instant::now();
+
         if recvfrom_result < 0 {
             return Err(std::io::Error::last_os_error())?;
         }
-        Ok(Some((
-            addr.try_into()?,
-            identifier,
-            sequence,
-            timestamp,
-            rx_time,
-        )))
+
+        match self.target_sa {
+            SocketAddr::V4(_) => Ok(super::parse_icmp_packet(rxtime, addr.try_into()?, &buf)),
+            SocketAddr::V6(_) => Ok(super::parse_icmpv6_packet(rxtime, addr.try_into()?, &buf)),
+        }
     }
 }
 

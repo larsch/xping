@@ -1,5 +1,4 @@
 use std::{
-    ffi::c_void,
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     process::abort,
     time::{Duration, Instant},
@@ -16,6 +15,21 @@ pub mod types {
     pub use WinSock::SOCKADDR_IN6 as sockaddr_in6;
     pub type AddressFamily = WinSock::ADDRESS_FAMILY;
     pub use super::{AsIpv4Addr, AsIpv6Addr, FromOctets};
+}
+
+fn parse_ipv4_packet(
+    rxtime: std::time::Instant,
+    addr: SocketAddr,
+    packet: &[u8],
+) -> Option<super::IcmpResponse> {
+    let ip_header_length = ((packet[0] & 0x0F) * 4) as usize;
+    let icmp_packet = &packet[ip_header_length..];
+    let ip_proto = packet[9];
+    if ip_proto == 1 {
+        super::parse_icmp_packet(rxtime, addr, icmp_packet)
+    } else {
+        None
+    }
 }
 
 pub trait FromOctets {
@@ -79,14 +93,11 @@ impl AsIpv6Addr for WinSock::IN6_ADDR {
 }
 
 use windows::{
-    core::{PSTR, PWSTR},
+    core::PSTR,
     Win32::{
-        Foundation::{HANDLE, HLOCAL},
+        Foundation::HANDLE,
         Networking::WinSock::{self, WSACloseEvent, WSAGetLastError, SOCKET_ERROR},
-        System::{
-            Diagnostics::Debug::{self, FormatMessageW},
-            IO::{CancelIoEx, OVERLAPPED},
-        },
+        System::IO::{CancelIoEx, OVERLAPPED},
     },
 };
 
@@ -116,14 +127,14 @@ impl Drop for PingProtocol {
     }
 }
 
-impl PingProtocol {
-    pub fn new(target: SocketAddr, length: usize) -> Result<Self, String> {
+impl super::Pinger for PingProtocol {
+    fn new(target: SocketAddr, length: usize) -> Result<Self, std::io::Error> {
         unsafe {
             let mut wsadata = WinSock::WSADATA::default();
             const VERSION_REQUESTED: u16 = 0x0202;
             let result = WinSock::WSAStartup(VERSION_REQUESTED, &mut wsadata);
             if result != 0 {
-                return Err(last_wsa_error());
+                return Err(std::io::Error::from_raw_os_error(result));
             }
         }
 
@@ -144,7 +155,7 @@ impl PingProtocol {
         };
 
         if socket == WinSock::INVALID_SOCKET {
-            return Err(last_wsa_error());
+            return Err(std::io::Error::last_os_error());
         }
 
         Ok(PingProtocol {
@@ -159,29 +170,25 @@ impl PingProtocol {
         })
     }
 
-    pub fn send(&mut self, sequence: u16, timestamp: u64) -> Result<(), std::io::Error> {
-        // let mut packet16 = [0u16; self.length];
-        // let packet: &mut [u8; 32] = unsafe { std::mem::transmute(&mut packet16) };
-        self.send_packet.resize(8 + self.length, 0u8);
-        let packet = &mut self.send_packet;
-        let identifier = sequence;
-        let code = match self.target {
+    fn send(&mut self, sequence: u16, timestamp: u64) -> Result<(), std::io::Error> {
+        let icmp_type = match self.target {
             SocketAddr::V4(_) => 8,
             SocketAddr::V6(_) => 128,
         };
-        packet[0] = code; // echo request
-        packet[1] = 0;
-        packet[2] = 0; // checksum msb
-        packet[3] = 0; // checksum lsb
-        packet[4..6].copy_from_slice(&identifier.to_be_bytes());
-        packet[6..8].copy_from_slice(&sequence.to_be_bytes());
-
-        // Insert timestamp
-        packet[8..16].copy_from_slice(&timestamp.to_be_bytes());
-
-        for (i, item) in packet.iter_mut().enumerate().skip(16) {
-            *item = i as u8;
-        }
+        let code = 0;
+        let id = sequence;
+        self.send_packet.resize(8 + self.length, 0u8);
+        super::construct_icmp_packet(
+            &mut self.send_packet,
+            icmp_type,
+            code,
+            id,
+            sequence,
+            timestamp,
+        );
+        // let mut packet16 = [0u16; self.length];
+        // let packet: &mut [u8; 32] = unsafe { std::mem::transmute(&mut packet16) };
+        let packet = &mut self.send_packet;
 
         // packet[self.length - 1] ^= 0xffu8;
 
@@ -191,27 +198,6 @@ impl PingProtocol {
             len: (self.length + 8) as u32,
             buf: packet_pstr,
         }];
-
-        unsafe {
-            // Calculate checksum
-            let packet16: &mut [u8] = self.send_packet.as_mut_slice();
-            let packet16: &mut [u16] = std::mem::transmute(packet16);
-            let len = self.send_packet.len();
-            let word_count = len / 2;
-
-            let data = packet16.as_mut_ptr();
-            let mut checksum: u32 = 0;
-            for pos in 0..word_count {
-                let word = *data.add(pos);
-                checksum += word as u32;
-            }
-            if len % 2 == 1 {
-                checksum += self.send_packet[len - 1] as u32;
-            }
-            checksum = (checksum & 0xFFFF) + (checksum >> 16);
-            checksum = (checksum & 0xFFFF) + (checksum >> 16);
-            *data.offset(1) = (checksum as u16) ^ 0xFFFF;
-        }
 
         let mut bytes_sent: u32 = 0;
 
@@ -238,10 +224,10 @@ impl PingProtocol {
         Ok(())
     }
 
-    pub fn recv(
+    fn recv(
         &mut self,
         timeout: Duration,
-    ) -> Result<Option<super::PingResponse>, Box<dyn std::error::Error>> {
+    ) -> Result<Option<super::IcmpResponse>, Box<dyn std::error::Error>> {
         let recv_wsabuf = [WinSock::WSABUF {
             len: self.recv_buffer.len() as u32,
             buf: PSTR::from_raw(self.recv_buffer.as_mut_ptr()),
@@ -326,70 +312,49 @@ impl PingProtocol {
             _ => panic!(),
         }
     }
+}
 
+impl PingProtocol {
     fn complete_recv_from(
         &self,
         addr: SocketAddr,
         recv_fromlen: usize,
-    ) -> Option<super::PingResponse> {
+    ) -> Option<super::IcmpResponse> {
         let packet = &self.recv_buffer[0..recv_fromlen];
-
-        let packet = match self.target {
-            SocketAddr::V4(_) => {
-                let ip_header_length = ((packet[0] & 0x0F) * 4) as usize;
-                &packet[ip_header_length..]
-            }
-            SocketAddr::V6(_) => packet,
-        };
-
-        let rx_time = Instant::now();
-        let icmp_packet = packet;
-
-        let icmp_type = icmp_packet[0];
-
-        let echo_reply = match self.target {
-            SocketAddr::V4(_) => 0,
-            SocketAddr::V6(_) => 129,
-        };
-
-        if icmp_type != echo_reply {
-            println!("Something not echo reply received {}", icmp_type);
+        let rxtime = Instant::now();
+        match self.target {
+            SocketAddr::V4(_) => parse_ipv4_packet(rxtime, addr, packet),
+            SocketAddr::V6(_) => super::parse_icmpv6_packet(rxtime, addr, packet),
         }
-
-        let identifier = u16::from_be_bytes(icmp_packet[4..6].try_into().unwrap());
-        let sequence = u16::from_be_bytes(icmp_packet[6..8].try_into().unwrap());
-        let timestamp = u64::from_be_bytes(icmp_packet[8..16].try_into().unwrap());
-
-        Some((addr, identifier, sequence, timestamp, rx_time))
     }
 }
 
-fn last_wsa_error() -> String {
-    let error_id = unsafe { WSAGetLastError() };
-    lookup_error(error_id.0 as u32).unwrap()
-}
+// fn last_wsa_error() -> String {
+//     let error_id = unsafe { WSAGetLastError() };
+//     lookup_error(error_id.0 as u32).unwrap()
+// }
 
-fn lookup_error(error_id: u32) -> Result<String, std::string::FromUtf16Error> {
-    let mut str = PWSTR::null();
-    let error_message = unsafe {
-        FormatMessageW(
-            Debug::FORMAT_MESSAGE_ALLOCATE_BUFFER
-                | Debug::FORMAT_MESSAGE_FROM_SYSTEM
-                | Debug::FORMAT_MESSAGE_IGNORE_INSERTS,
-            None,
-            error_id,
-            0,
-            #[allow(clippy::crosspointer_transmute)] // This is safe and required by the API
-            std::mem::transmute(&mut str as *mut PWSTR),
-            0,
-            None,
-        );
-        let error_message = str.to_string();
-        windows::Win32::Foundation::LocalFree(HLOCAL(str.as_ptr() as *mut c_void));
-        error_message
-    };
-    Ok(error_message.unwrap())
-}
+// fn lookup_error(error_id: u32) -> Result<String, std::string::FromUtf16Error> {
+//     let mut str = PWSTR::null();
+//     let error_message = unsafe {
+//         FormatMessageW(
+//             Debug::FORMAT_MESSAGE_ALLOCATE_BUFFER
+//                 | Debug::FORMAT_MESSAGE_FROM_SYSTEM
+//                 | Debug::FORMAT_MESSAGE_IGNORE_INSERTS,
+//             None,
+//             error_id,
+//             0,
+//             #[allow(clippy::crosspointer_transmute)] // This is safe and required by the API
+//             std::mem::transmute(&mut str as *mut PWSTR),
+//             0,
+//             None,
+//         );
+//         let error_message = str.to_string();
+//         windows::Win32::Foundation::LocalFree(HLOCAL(str.as_ptr() as *mut c_void));
+//         error_message
+//     };
+//     Ok(error_message.unwrap())
+// }
 
 #[cfg(test)]
 mod test {

@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::display::DisplayModeTrait;
+use crate::{display::DisplayModeTrait, ping::Pinger};
 
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
@@ -163,24 +163,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let time_left = time_left.min(Duration::from_millis(50));
 
             let response = ping_protocol.recv(time_left).unwrap();
-            if let Some((_addr, _identifier, rx_sequence, tx_timestamp, rx_time)) = response {
-                let rx_timestamp = (rx_time - time_reference).as_nanos() as u64;
-                if tx_timestamp > rx_timestamp {
-                    continue; // Ignore responses that were sent after the receive timestamp
-                }
-                let nanos = rx_timestamp - tx_timestamp;
-                let round_trip_time = std::time::Duration::from_nanos(nanos);
+            if let Some(response) = response {
+                let rx_timestamp = (response.time - time_reference).as_nanos() as u64;
+                if let Some(tx_timestamp) = response.timestamp {
+                    if tx_timestamp > rx_timestamp {
+                        continue; // Ignore responses that were sent after the receive timestamp
+                    }
+                    let nanos = rx_timestamp - tx_timestamp;
+                    let round_trip_time = std::time::Duration::from_nanos(nanos);
 
-                if !entries.is_empty() {
-                    let front_sequence = entries.front().unwrap().sequence;
-                    let position = (rx_sequence as usize + 65536 - front_sequence as usize) % 65536;
-                    if position <= entries.len() {
-                        let entry = &entries[position];
-                        display_mode.display_receive(entry.sequence, round_trip_time)?;
-                        if position == 0 {
-                            entries.pop_front();
-                        } else {
-                            entries[position].received = true;
+                    if !entries.is_empty() {
+                        let front_sequence = entries.front().unwrap().sequence;
+                        let position =
+                            (response.seq as usize + 65536 - front_sequence as usize) % 65536;
+                        if position <= entries.len() {
+                            let entry = &entries[position];
+                            display_mode.display_receive(
+                                entry.sequence,
+                                response,
+                                round_trip_time,
+                            )?;
+                            if position == 0 {
+                                entries.pop_front();
+                            } else {
+                                entries[position].received = true;
+                            }
                         }
                     }
                 }

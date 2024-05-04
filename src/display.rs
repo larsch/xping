@@ -2,6 +2,8 @@ use std::{collections::HashMap, io::Write, net::IpAddr};
 
 use crossterm::QueueableCommand;
 
+use crate::ping::IcmpResponse;
+
 #[derive(clap::ValueEnum, Clone, Debug, Default)]
 pub enum DisplayMode {
     #[default]
@@ -16,6 +18,7 @@ impl std::fmt::Display for DisplayMode {
         write!(f, "{:?}", self)
     }
 }
+
 pub trait DisplayModeTrait {
     fn new(columns: u16, rows: u16) -> Self
     where
@@ -29,6 +32,7 @@ pub trait DisplayModeTrait {
     fn display_receive(
         &mut self,
         sequence: u64,
+        response: IcmpResponse,
         round_trip_time: std::time::Duration,
     ) -> std::io::Result<()>;
     fn display_timeout(&mut self, sequence: u64) -> std::io::Result<()>;
@@ -49,7 +53,7 @@ impl ClassicDisplayMode {
         self.stdout
             .queue(crossterm::cursor::MoveUp(relative_sequence as u16))?;
         self.stdout
-            .queue(crossterm::cursor::MoveRight(width as u16 + 1))?;
+            .queue(crossterm::cursor::MoveToColumn(width as u16 + 1))?;
         print!("{}", outcome);
         self.stdout.queue(crossterm::cursor::RestorePosition)?;
         self.stdout.flush()
@@ -81,9 +85,30 @@ impl DisplayModeTrait for ClassicDisplayMode {
     fn display_receive(
         &mut self,
         sequence: u64,
+        _response: IcmpResponse,
         round_trip_time: std::time::Duration,
     ) -> std::io::Result<()> {
-        self.display_outcome(sequence, &format!("time={:?}", round_trip_time))
+        match _response.icmp_type {
+            crate::ping::IcmpType::EchoReply(_) => {
+                self.display_outcome(sequence, &format!("time={:?}", round_trip_time))
+            }
+            crate::ping::IcmpType::IPv4DestinationUnreachable(unreach) => self.display_outcome(
+                sequence,
+                &format!(
+                    "Destination unreachable from {:?}, {}",
+                    _response.addr,
+                    crate::ping::ipv4unreach_to_string(unreach)
+                ),
+            ),
+            crate::ping::IcmpType::IPv6DestinationUnreachable(unreach) => self.display_outcome(
+                sequence,
+                &format!(
+                    "Destination unreachable from {:?}, {}",
+                    _response.addr,
+                    crate::ping::ipv6unreach_to_string(unreach)
+                ),
+            ),
+        }
     }
 
     fn display_timeout(&mut self, sequence: u64) -> std::io::Result<()> {
@@ -116,6 +141,7 @@ impl DisplayModeTrait for DumbDisplayMode {
     fn display_receive(
         &mut self,
         _sequence: u64,
+        _response: IcmpResponse,
         _round_trip_time: std::time::Duration,
     ) -> std::io::Result<()> {
         Ok(println!(
@@ -200,6 +226,7 @@ impl DisplayModeTrait for CharDisplayMode {
     fn display_receive(
         &mut self,
         sequence: u64,
+        _response: IcmpResponse,
         _round_trip_time: std::time::Duration,
     ) -> std::io::Result<()> {
         self.display_outcome(sequence, "o", crossterm::style::Color::Green)
@@ -287,6 +314,7 @@ impl DisplayModeTrait for CharGraphDisplayMode {
     fn display_receive(
         &mut self,
         sequence: u64,
+        _response: IcmpResponse,
         round_trip_time: std::time::Duration,
     ) -> std::io::Result<()> {
         let n = (round_trip_time.as_millis() as f64 + 1.0).ln().max(0.0) / 7.0
