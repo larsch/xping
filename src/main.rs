@@ -92,6 +92,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let icmp_timeout = std::time::Duration::from_millis(args.timeout);
+
     while attempts_left > 0 || !entries.is_empty() {
         if attempts_left > 0 {
             let timestamp = time_reference.elapsed().as_nanos() as u64;
@@ -104,14 +106,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             entries.push_back(Entry {
                 sequence,
-                timeout: std::time::Instant::now() + std::time::Duration::from_millis(args.timeout),
+                timeout: std::time::Instant::now() + icmp_timeout,
                 received: false,
             });
             sequence += 1;
             next_send += interval;
         }
 
+        // Receive loop
         loop {
+            // Clean up entries that have timed out
             while !entries.is_empty() {
                 let entry = entries.front().unwrap();
                 if entry.received {
@@ -126,61 +130,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
 
-            if attempts_left > 0 && (next_send - std::time::Instant::now()).is_zero() {
-                // Break receive loop and send next request
+            if entries.is_empty() && attempts_left == 0 {
                 break;
             }
 
-            // println!("attempt_left = {}, entries.len() = {}", attempts_left, entries.len());
-
-            //dbg!("next_send_in = {:?}", next_send - std::time::Instant::now());
-
-            let wait_for = if attempts_left > 0 {
+            // Determine how long to wait until the next event
+            let wait_until = if attempts_left > 0 {
                 if entries.is_empty() {
-                    // Wait for next send
-                    //dbg!("wait_next_send");
-                    next_send
+                    next_send // Wait for next send
                 } else {
-                    // Wait for next timeout or next send
-                    //dbg!("wait_next_timeout_or_send");
-                    next_send.min(entries.front().unwrap().timeout)
+                    next_send.min(entries.front().unwrap().timeout) // Wait for next timeout or next send
                 }
             } else if entries.is_empty() {
-                // No more attempts left and no more entries to wait for
-                //dbg!("wait_no_more_attempts_or_entries");
-                break;
+                break; // No more attempts left and no more entries to wait for
             } else {
-                // Wait for next timeout
-                //dbg!("wait_next_timeout {}", entries.len());
-                entries.front().unwrap().timeout
+                entries.front().unwrap().timeout // Wait for next timeout
             };
 
-            let time_left = wait_for - std::time::Instant::now();
-            if time_left.is_zero() {
-                if attempts_left == 0 {
-                    return Ok(());
-                }
-                break;
-            }
-
-            //dbg!("time_left = {:?}", time_left);
+            let time_left = wait_until - std::time::Instant::now();
 
             let response = ping_protocol.recv(time_left).unwrap();
             if let Some((_addr, _identifier, rx_sequence, tx_timestamp, rx_time)) = response {
-                // println!("rx_time = {:?}", rx_time);
-                // println!("timestamp = {:?}", timestamp);
                 let rx_timestamp = (rx_time - time_reference).as_nanos() as u64;
                 if tx_timestamp > rx_timestamp {
-                    // Ignore packets that were sent after the response was received (quantum packets)
-                    continue;
+                    continue; // Ignore responses that were sent after the receive timestamp
                 }
                 let nanos = rx_timestamp - tx_timestamp;
                 let round_trip_time = std::time::Duration::from_nanos(nanos);
-                let relative_sequence = (sequence as usize + 65536 - rx_sequence as usize) % 65536;
-                if relative_sequence >= 80 {
-                    // Ignore packets that are too old
-                    continue;
-                }
 
                 if !entries.is_empty() {
                     let front_sequence = entries.front().unwrap().sequence;
@@ -195,6 +171,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
+            }
+
+            if attempts_left > 0 && (next_send - std::time::Instant::now()).is_zero() {
+                break; // Break receive loop and send next request
             }
         }
     }
