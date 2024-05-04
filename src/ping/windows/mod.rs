@@ -110,7 +110,6 @@ impl Drop for PingProtocol {
             }
         }
         unsafe {
-            println!("Closing socket");
             let close_result = WinSock::closesocket(self.socket);
             assert!(close_result == 0, "Failed to close socket");
         }
