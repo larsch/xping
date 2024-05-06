@@ -26,7 +26,7 @@ struct Args {
     count: Option<u32>,
 
     /// Timeout waiting for response in milliseconds
-    #[arg(short, long, default_value_t = 1000)]
+    #[arg(short = 'w', long, default_value_t = 1000)]
     timeout: u64,
 
     /// Length
@@ -40,6 +40,10 @@ struct Args {
     /// Display mode
     #[arg(short, long, default_value = "classic")]
     display: display::DisplayMode,
+
+    /// Time to live
+    #[arg(short, long, default_value_t = 64)]
+    ttl: u8,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -65,6 +69,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut next_send = std::time::Instant::now();
     let mut ping_protocol = ping::PingProtocol::new(target_sa, args.length)?;
 
+    ping_protocol.set_ttl(args.ttl)?;
+
     let mut sequence = 0u64;
 
     let time_reference = Instant::now();
@@ -88,9 +94,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         display::DisplayMode::Classic => Box::new(display::ClassicDisplayMode::new(columns, rows)),
         display::DisplayMode::Char => Box::new(display::CharDisplayMode::new(columns, rows)),
         display::DisplayMode::Dumb => Box::new(display::DumbDisplayMode::new(columns, rows)),
-        display::DisplayMode::CharGraph => {
-            Box::new(display::CharGraphDisplayMode::new(columns, rows))
-        }
+        display::DisplayMode::CharGraph => Box::new(display::CharGraphDisplayMode::new(columns, rows)),
+        display::DisplayMode::Debug => Box::new(display::DebugDisplayMode::new(columns, rows)),
     };
 
     let icmp_timeout = std::time::Duration::from_millis(args.timeout);
@@ -162,27 +167,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Ensure that Ctrl-C is responsive
             let time_left = time_left.min(Duration::from_millis(50));
 
-            let response = ping_protocol.recv(time_left).unwrap();
-            if let Some(response) = response {
-                let rx_timestamp = (response.time - time_reference).as_nanos() as u64;
-                if let Some(tx_timestamp) = response.timestamp {
-                    if tx_timestamp > rx_timestamp {
-                        continue; // Ignore responses that were sent after the receive timestamp
-                    }
-                    let nanos = rx_timestamp - tx_timestamp;
-                    let round_trip_time = std::time::Duration::from_nanos(nanos);
+            let response = ping_protocol.recv(time_left)?;
+            println!("recv -> {:?}", &response);
+            match response {
+                ping::IcmpResult::IcmpPacket(packet) => {
+                    if let Some(tx_timestamp) = packet.message.timestamp {
+                        let rx_timestamp = (packet.time - time_reference).as_nanos() as u64;
 
-                    if !entries.is_empty() {
+                        if tx_timestamp > rx_timestamp || entries.is_empty() {
+                            continue; // Ignore responses that were sent after the receive timestamp
+                        }
+                        let nanos = rx_timestamp - tx_timestamp;
+                        let round_trip_time = std::time::Duration::from_nanos(nanos);
                         let front_sequence = entries.front().unwrap().sequence;
-                        let position =
-                            (response.seq as usize + 65536 - front_sequence as usize) % 65536;
+                        let position = (packet.message.seq as usize + 65536 - front_sequence as usize) % 65536;
                         if position <= entries.len() {
                             let entry = &entries[position];
-                            display_mode.display_receive(
-                                entry.sequence,
-                                response,
-                                round_trip_time,
-                            )?;
+                            display_mode.display_receive(entry.sequence, &packet, round_trip_time)?;
                             if position == 0 {
                                 entries.pop_front();
                             } else {
@@ -191,6 +192,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     }
                 }
+                ping::IcmpResult::RecvError(error) => {
+                    if entries.is_empty() {
+                        continue;
+                    }
+                    if let Some(orig_message) = &error.original_message {
+                        let orig_sequence = orig_message.seq;
+                        let front_sequence = entries.front().unwrap().sequence;
+                        let position = (orig_sequence as usize + 65536 - front_sequence as usize) % 65536;
+                        if position <= entries.len() {
+                            let entry = &entries[position];
+                            display_mode.display_error(entry.sequence, &error)?;
+                            if position == 0 {
+                                entries.pop_front();
+                            } else {
+                                entries[position].received = true;
+                            }
+                        }
+                    }
+                }
+                ping::IcmpResult::Timeout => (),
+                ping::IcmpResult::Interrupted => (),
             }
 
             if attempts_left > 0 && (next_send - std::time::Instant::now()).is_zero() {

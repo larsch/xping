@@ -17,16 +17,12 @@ pub mod types {
     pub use super::{AsIpv4Addr, AsIpv6Addr, FromOctets};
 }
 
-fn parse_ipv4_packet(
-    rxtime: std::time::Instant,
-    addr: SocketAddr,
-    packet: &[u8],
-) -> Option<super::IcmpResponse> {
+fn parse_ipv4_packet(packet: &[u8]) -> Option<super::IcmpMessage> {
     let ip_header_length = ((packet[0] & 0x0F) * 4) as usize;
     let icmp_packet = &packet[ip_header_length..];
     let ip_proto = packet[9];
     if ip_proto == 1 {
-        super::parse_icmp_packet(rxtime, addr, icmp_packet)
+        super::parse_icmp_packet(icmp_packet)
     } else {
         None
     }
@@ -143,16 +139,7 @@ impl super::Pinger for PingProtocol {
             SocketAddr::V6(_) => (WinSock::AF_INET6, WinSock::IPPROTO_ICMPV6),
         };
 
-        let socket = unsafe {
-            WinSock::WSASocketW(
-                family.0 as i32,
-                WinSock::SOCK_RAW.0,
-                proto.0,
-                None,
-                0,
-                WinSock::WSA_FLAG_OVERLAPPED,
-            )
-        };
+        let socket = unsafe { WinSock::WSASocketW(family.0 as i32, WinSock::SOCK_RAW.0, proto.0, None, 0, WinSock::WSA_FLAG_OVERLAPPED) };
 
         if socket == WinSock::INVALID_SOCKET {
             return Err(std::io::Error::last_os_error());
@@ -170,6 +157,18 @@ impl super::Pinger for PingProtocol {
         })
     }
 
+    fn set_ttl(&mut self, ttl: u8) -> Result<(), std::io::Error> {
+        let ttl = ttl as u32;
+        if self.target.is_ipv4() {
+            self.setsockopt(WinSock::SOL_IP, WinSock::IP_TTL, &ttl)?;
+            self.setsockopt(WinSock::SOL_IP, WinSock::IP_MULTICAST_TTL, &ttl)?;
+        } else {
+            self.setsockopt(WinSock::SOL_IPV6, WinSock::IPV6_UNICAST_HOPS, &ttl)?;
+            self.setsockopt(WinSock::SOL_IPV6, WinSock::IPV6_MULTICAST_HOPS, &ttl)?;
+        }
+        Ok(())
+    }
+
     fn send(&mut self, sequence: u16, timestamp: u64) -> Result<(), std::io::Error> {
         let icmp_type = match self.target {
             SocketAddr::V4(_) => 8,
@@ -178,14 +177,7 @@ impl super::Pinger for PingProtocol {
         let code = 0;
         let id = sequence;
         self.send_packet.resize(8 + self.length, 0u8);
-        super::construct_icmp_packet(
-            &mut self.send_packet,
-            icmp_type,
-            code,
-            id,
-            sequence,
-            timestamp,
-        );
+        super::construct_icmp_packet(&mut self.send_packet, icmp_type, code, id, sequence, timestamp);
         // let mut packet16 = [0u16; self.length];
         // let packet: &mut [u8; 32] = unsafe { std::mem::transmute(&mut packet16) };
         let packet = &mut self.send_packet;
@@ -224,10 +216,7 @@ impl super::Pinger for PingProtocol {
         Ok(())
     }
 
-    fn recv(
-        &mut self,
-        timeout: Duration,
-    ) -> Result<Option<super::IcmpResponse>, Box<dyn std::error::Error>> {
+    fn recv(&mut self, timeout: Duration) -> Result<super::IcmpResult, std::io::Error> {
         let recv_wsabuf = [WinSock::WSABUF {
             len: self.recv_buffer.len() as u32,
             buf: PSTR::from_raw(self.recv_buffer.as_mut_ptr()),
@@ -262,16 +251,18 @@ impl super::Pinger for PingProtocol {
                     // The operation completed immediately
                     unsafe { WinSock::WSACloseEvent(self.recv_overlapped.hEvent) }.unwrap();
                     self.recv_overlapped.hEvent = HANDLE::default();
-                    return Ok(self.complete_recv_from(
-                        self.recv_from.clone().try_into()?,
-                        bytes_received as usize,
-                    ));
+                    return Ok(super::IcmpResult::IcmpPacket(super::IcmpPacket {
+                        addr: self.recv_from.clone().try_into().unwrap(),
+                        message: self.complete_recv_from(bytes_received as usize).unwrap(),
+                        time: Instant::now(),
+                        recvttl: None,
+                    }));
                 }
                 SOCKET_ERROR => {
                     // The operation failed (or overlapped operation is pending)
                     let err = unsafe { WinSock::WSAGetLastError() };
                     if err != WinSock::WSA_IO_PENDING {
-                        return Err(Box::new(std::io::Error::from_raw_os_error(err.0 as i32)));
+                        return Err(std::io::Error::from_raw_os_error(err.0 as i32));
                     }
                 }
                 _ => {
@@ -283,14 +274,11 @@ impl super::Pinger for PingProtocol {
         let timeout = timeout.as_millis() as u32;
 
         // An overlapped operation has now been started
-        let rc = unsafe {
-            WinSock::WSAWaitForMultipleEvents(&[self.recv_overlapped.hEvent], true, timeout, true)
-        };
+        let rc = unsafe { WinSock::WSAWaitForMultipleEvents(&[self.recv_overlapped.hEvent], true, timeout, true) };
+
         match rc.0 {
-            WinSock::WSA_WAIT_TIMEOUT => Ok(None),
-            WinSock::WSA_WAIT_FAILED => Err(Box::new(std::io::Error::from_raw_os_error(
-                unsafe { WinSock::WSAGetLastError() }.0 as i32,
-            ))),
+            WinSock::WSA_WAIT_TIMEOUT => Ok(super::IcmpResult::Timeout),
+            WinSock::WSA_WAIT_FAILED => Err(std::io::Error::from_raw_os_error(unsafe { WinSock::WSAGetLastError() }.0 as i32)),
             0 => {
                 let mut flags = 0u32;
                 unsafe {
@@ -307,7 +295,14 @@ impl super::Pinger for PingProtocol {
                 unsafe { WSACloseEvent(self.recv_overlapped.hEvent) }.unwrap();
                 self.recv_overlapped.hEvent = HANDLE::default();
                 let sa: Result<SocketAddr, String> = self.recv_from.clone().try_into();
-                Ok(self.complete_recv_from(sa.unwrap(), bytes_received as usize))
+                println!("received {} bytes", bytes_received);
+
+                Ok(super::IcmpResult::IcmpPacket(super::IcmpPacket {
+                    addr: sa.unwrap(),
+                    message: self.complete_recv_from(bytes_received as usize).unwrap(),
+                    time: Instant::now(),
+                    recvttl: None,
+                }))
             }
             _ => panic!(),
         }
@@ -315,16 +310,32 @@ impl super::Pinger for PingProtocol {
 }
 
 impl PingProtocol {
-    fn complete_recv_from(
-        &self,
-        addr: SocketAddr,
-        recv_fromlen: usize,
-    ) -> Option<super::IcmpResponse> {
+    fn setsockopt<T: Sized, N: TryInto<i32>>(&self, level: N, optname: i32, optval: &T) -> Result<(), std::io::Error>
+    where
+        N::Error: std::fmt::Debug,
+    {
+        let result = unsafe {
+            WinSock::setsockopt(
+                self.socket,
+                level.try_into().unwrap(),
+                optname,
+                Some(std::slice::from_raw_parts(
+                    optval as *const T as *const u8,
+                    std::mem::size_of::<T>(),
+                )),
+            )
+        };
+        if result == SOCKET_ERROR {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    fn complete_recv_from(&self, recv_fromlen: usize) -> Option<super::IcmpMessage> {
         let packet = &self.recv_buffer[0..recv_fromlen];
-        let rxtime = Instant::now();
         match self.target {
-            SocketAddr::V4(_) => parse_ipv4_packet(rxtime, addr, packet),
-            SocketAddr::V6(_) => super::parse_icmpv6_packet(rxtime, addr, packet),
+            SocketAddr::V4(_) => parse_ipv4_packet(packet),
+            SocketAddr::V6(_) => super::parse_icmpv6_packet(packet),
         }
     }
 }
@@ -377,10 +388,7 @@ mod test {
         let octets = [0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8];
         let addr = super::types::in6_addr::from_octets(&octets);
         unsafe {
-            assert_eq!(
-                addr.u.Byte,
-                [0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8]
-            );
+            assert_eq!(addr.u.Byte, [0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8]);
         }
     }
 }

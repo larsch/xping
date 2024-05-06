@@ -22,9 +22,7 @@ impl Default for SockAddr {
 
 impl Clone for SockAddr {
     fn clone(&self) -> Self {
-        SockAddr {
-            sa: unsafe { self.sa },
-        }
+        SockAddr { sa: unsafe { self.sa } }
     }
 }
 
@@ -46,6 +44,32 @@ impl AsMut<sockaddr> for SockAddr {
     }
 }
 
+pub trait TryFromOsSockAddr {
+    fn from_sockaddr(raw: *const sockaddr) -> Result<Self, String>
+    where
+        Self: Sized;
+}
+
+impl TryFromOsSockAddr for SocketAddr {
+    fn from_sockaddr(raw: *const sockaddr) -> Result<SocketAddr, String> {
+        let sockaddr_sa = unsafe { &*(raw as *const sockaddr) };
+        println!("sockaddr_sa.sa_family: {:?}", sockaddr_sa.sa_family);
+        match sockaddr_sa.sa_family as AddressFamily {
+            AF_INET => {
+                let sockaddr_in = unsafe { &*(raw as *const sockaddr_in) };
+                let port = u16::from_be(sockaddr_in.sin_port);
+                Ok(SocketAddr::V4(SocketAddrV4::new(sockaddr_in.sin_addr.as_ipv4addr(), port)))
+            }
+            AF_INET6 => {
+                let sockaddr_in6 = unsafe { &*(raw as *const sockaddr_in6) };
+                let port = u16::from_be(sockaddr_in6.sin6_port);
+                Ok(SocketAddr::V6(SocketAddrV6::new(sockaddr_in6.sin6_addr.as_ipv6addr(), port, 0, 0)))
+            }
+            _ => panic!("Unhandled address family"),
+        }
+    }
+}
+
 impl TryFrom<SockAddr> for SocketAddr {
     type Error = String;
 
@@ -54,20 +78,12 @@ impl TryFrom<SockAddr> for SocketAddr {
             AF_INET => {
                 let sockaddr_in: &sockaddr_in = unsafe { &value.sin };
                 let port = u16::from_be(sockaddr_in.sin_port);
-                Ok(SocketAddr::V4(SocketAddrV4::new(
-                    sockaddr_in.sin_addr.as_ipv4addr(),
-                    port,
-                )))
+                Ok(SocketAddr::V4(SocketAddrV4::new(sockaddr_in.sin_addr.as_ipv4addr(), port)))
             }
             AF_INET6 => {
                 let sockaddr_in6 = unsafe { &value.sin6 };
                 let port = u16::from_be(sockaddr_in6.sin6_port);
-                Ok(SocketAddr::V6(SocketAddrV6::new(
-                    sockaddr_in6.sin6_addr.as_ipv6addr(),
-                    port,
-                    0,
-                    0,
-                )))
+                Ok(SocketAddr::V6(SocketAddrV6::new(sockaddr_in6.sin6_addr.as_ipv6addr(), port, 0, 0)))
             }
             _ => Err("Unhandled address family".to_owned()),
         }
@@ -150,10 +166,7 @@ mod tests {
         };
 
         let socket_addr: SocketAddr = sockaddr.try_into().unwrap();
-        assert_eq!(
-            socket_addr,
-            SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 8443))
-        );
+        assert_eq!(socket_addr, SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 8443)));
 
         // Test IPv6 address
         let sockaddr = SockAddr {
@@ -167,12 +180,7 @@ mod tests {
         let socket_addr: SocketAddr = sockaddr.try_into().unwrap();
         assert_eq!(
             socket_addr,
-            SocketAddr::V6(SocketAddrV6::new(
-                Ipv6Addr::new(1, 2, 3, 4, 5, 6, 7, 8),
-                8080,
-                0,
-                0
-            ))
+            SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::new(1, 2, 3, 4, 5, 6, 7, 8), 8080, 0, 0))
         );
     }
 }
