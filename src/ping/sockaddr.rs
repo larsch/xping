@@ -6,6 +6,7 @@ use crate::ping::linux::types::*;
 #[cfg(target_os = "windows")]
 use crate::ping::windows::types::*;
 
+#[derive(Clone, Copy)]
 pub union SockAddr {
     sa: sockaddr,
     sin: sockaddr_in,
@@ -17,12 +18,6 @@ impl Default for SockAddr {
         SockAddr {
             sa: unsafe { std::mem::zeroed() },
         }
-    }
-}
-
-impl Clone for SockAddr {
-    fn clone(&self) -> Self {
-        SockAddr { sa: unsafe { self.sa } }
     }
 }
 
@@ -53,7 +48,6 @@ pub trait TryFromOsSockAddr {
 impl TryFromOsSockAddr for SocketAddr {
     fn from_sockaddr(raw: *const sockaddr) -> Result<SocketAddr, String> {
         let sockaddr_sa = unsafe { &*(raw as *const sockaddr) };
-        println!("sockaddr_sa.sa_family: {:?}", sockaddr_sa.sa_family);
         match sockaddr_sa.sa_family as AddressFamily {
             AF_INET => {
                 let sockaddr_in = unsafe { &*(raw as *const sockaddr_in) };

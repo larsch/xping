@@ -88,11 +88,13 @@ impl AsIpv6Addr for WinSock::IN6_ADDR {
     }
 }
 
+use crossterm::terminal::WindowSize;
+use libc::c_void;
 use windows::{
     core::PSTR,
     Win32::{
         Foundation::HANDLE,
-        Networking::WinSock::{self, WSACloseEvent, WSAGetLastError, SOCKET_ERROR},
+        Networking::WinSock::{self, WSACloseEvent, WSAGetLastError, WSAIoctl, SOCKET_ERROR},
         System::IO::{CancelIoEx, OVERLAPPED},
     },
 };
@@ -106,6 +108,7 @@ pub struct PingProtocol {
     recv_buffer: [u8; 1500],
     target: SocketAddr,
     length: usize,
+    wsarecvmsg: WinSock::LPFN_WSARECVMSG,
 }
 
 impl Drop for PingProtocol {
@@ -140,10 +143,32 @@ impl super::Pinger for PingProtocol {
         };
 
         let socket = unsafe { WinSock::WSASocketW(family.0 as i32, WinSock::SOCK_RAW.0, proto.0, None, 0, WinSock::WSA_FLAG_OVERLAPPED) };
-
         if socket == WinSock::INVALID_SOCKET {
             return Err(std::io::Error::last_os_error());
         }
+
+        let mut recvmsg_function_pointer: *const std::ffi::c_void = std::ptr::null_mut();
+        let mut bytes_returned = 0u32;
+        let result = unsafe {
+            WSAIoctl(
+                socket,
+                WinSock::SIO_GET_EXTENSION_FUNCTION_POINTER,
+                Some(&WinSock::WSAID_WSARECVMSG as *const windows::core::GUID as *const c_void),
+                std::mem::size_of::<windows::core::GUID>() as u32,
+                Some(&mut recvmsg_function_pointer as *mut *const c_void as *mut c_void),
+                std::mem::size_of::<*const c_void>() as u32,
+                &mut bytes_returned,
+                None,
+                None,
+            )
+        };
+        // convert recvmsg_function_pointer to WinSock::LPFN_WSARECVMSG
+
+        if result == WinSock::SOCKET_ERROR {
+            return Err(std::io::Error::last_os_error());
+        }
+        let recvmsg_function_pointer =
+            unsafe { std::mem::transmute::<*const std::ffi::c_void, WinSock::LPFN_WSARECVMSG>(recvmsg_function_pointer) };
 
         Ok(PingProtocol {
             socket,
@@ -154,17 +179,18 @@ impl super::Pinger for PingProtocol {
             recv_from: Default::default(),
             recv_fromlen: 0,
             length,
+            wsarecvmsg: recvmsg_function_pointer,
         })
     }
 
     fn set_ttl(&mut self, ttl: u8) -> Result<(), std::io::Error> {
         let ttl = ttl as u32;
         if self.target.is_ipv4() {
-            self.setsockopt(WinSock::SOL_IP, WinSock::IP_TTL, &ttl)?;
-            self.setsockopt(WinSock::SOL_IP, WinSock::IP_MULTICAST_TTL, &ttl)?;
+            self.setsockopt(WinSock::IPPROTO_IP.0, WinSock::IP_TTL, &ttl)?;
+            self.setsockopt(WinSock::IPPROTO_IP.0, WinSock::IP_MULTICAST_TTL, &ttl)?;
         } else {
-            self.setsockopt(WinSock::SOL_IPV6, WinSock::IPV6_UNICAST_HOPS, &ttl)?;
-            self.setsockopt(WinSock::SOL_IPV6, WinSock::IPV6_MULTICAST_HOPS, &ttl)?;
+            self.setsockopt(WinSock::IPPROTO_IPV6.0, WinSock::IPV6_UNICAST_HOPS, &ttl)?;
+            self.setsockopt(WinSock::IPPROTO_IPV6.0, WinSock::IPV6_MULTICAST_HOPS, &ttl)?;
         }
         Ok(())
     }
@@ -250,6 +276,7 @@ impl super::Pinger for PingProtocol {
                 0 => {
                     // The operation completed immediately
                     unsafe { WinSock::WSACloseEvent(self.recv_overlapped.hEvent) }.unwrap();
+
                     self.recv_overlapped.hEvent = HANDLE::default();
                     return Ok(super::IcmpResult::IcmpPacket(super::IcmpPacket {
                         addr: self.recv_from.clone().try_into().unwrap(),
@@ -295,7 +322,6 @@ impl super::Pinger for PingProtocol {
                 unsafe { WSACloseEvent(self.recv_overlapped.hEvent) }.unwrap();
                 self.recv_overlapped.hEvent = HANDLE::default();
                 let sa: Result<SocketAddr, String> = self.recv_from.clone().try_into();
-                println!("received {} bytes", bytes_received);
 
                 Ok(super::IcmpResult::IcmpPacket(super::IcmpPacket {
                     addr: sa.unwrap(),

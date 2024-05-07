@@ -69,7 +69,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut next_send = std::time::Instant::now();
     let mut ping_protocol = ping::PingProtocol::new(target_sa, args.length)?;
 
-    ping_protocol.set_ttl(args.ttl)?;
+    ping_protocol.set_ttl(args.ttl).expect("Failed to set TTL");
 
     let mut sequence = 0u64;
 
@@ -168,7 +168,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let time_left = time_left.min(Duration::from_millis(50));
 
             let response = ping_protocol.recv(time_left)?;
-            println!("recv -> {:?}", &response);
             match response {
                 ping::IcmpResult::IcmpPacket(packet) => {
                     if let Some(tx_timestamp) = packet.message.timestamp {

@@ -206,7 +206,6 @@ impl Display for IPv4DestinationUnreachable {
 
 fn parse_icmp_packet(packet: &[u8]) -> Option<IcmpMessage> {
     let icmp_type = packet[0];
-    println!("Received ICMP packet: {:?}", packet);
 
     let reply = match icmp_type {
         0 => IcmpType::EchoReply(u64::from_be_bytes(packet[8..16].try_into().unwrap())),
@@ -404,7 +403,6 @@ mod tests {
         pinger.set_ttl(4)?;
         pinger.send(sequence, timestamp)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
-        println!("{:?}", packet);
         assert!(matches!(packet, IcmpResult::RecvError(_)));
         let err = match packet {
             IcmpResult::RecvError(err) => err,

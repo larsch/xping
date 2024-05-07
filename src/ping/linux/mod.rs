@@ -103,9 +103,6 @@ impl From<&libc::sock_extended_err> for IcmpExtendedSocketErr {
         let offender = match err.ee_errno as i32 {
             libc::EHOSTUNREACH | libc::ENETUNREACH => {
                 let addr = unsafe { libc::SO_EE_OFFENDER(err) };
-                println!("addr = {:p}", addr);
-
-                println!("addr.family = {}", unsafe { (*addr).sa_family });
                 if addr.is_null() {
                     None
                 } else {
@@ -329,18 +326,12 @@ impl super::Pinger for PingProtocol {
                 received_bytes = result as usize;
                 let mut cmsg = unsafe { libc::CMSG_FIRSTHDR(&msghdr) };
                 while cmsg != std::ptr::null_mut() {
-                    println!("cmsg = {:p}", cmsg);
-                    println!("cmsg.cmsg_len = {}", unsafe { (*cmsg).cmsg_len });
-                    println!("cmsg.cmsg_level = {}", unsafe { (*cmsg).cmsg_level });
                     let cmsg_type = unsafe { (*cmsg).cmsg_type };
 
                     let dataptr = unsafe { libc::CMSG_DATA(cmsg) };
                     let data_offset = unsafe { dataptr.offset_from(cmsg as *const u8) } as usize;
-                    println!("data_offset = {}", data_offset);
                     let data_len = unsafe { (*cmsg).cmsg_len } as usize - data_offset;
-                    println!("data_len = {}", data_len);
                     let data = unsafe { std::slice::from_raw_parts(dataptr, data_len) };
-                    println!("data as hex: {}", hex::encode(data));
 
                     match cmsg_type {
                         libc::IP_TTL => {
@@ -352,28 +343,6 @@ impl super::Pinger for PingProtocol {
                         libc::IP_RECVERR => {
                             if data.len() >= std::mem::size_of::<libc::sock_extended_err>() {
                                 let serr = unsafe { &*(dataptr as *const libc::sock_extended_err) };
-                                println!("sizeof(sock_extended_err) = {}", std::mem::size_of::<libc::sock_extended_err>());
-
-                                println!(
-                                    "serr.ee_errno = {}, {}",
-                                    serr.ee_errno,
-                                    std::io::Error::from_raw_os_error(serr.ee_errno as i32)
-                                );
-                                println!(
-                                    "serr.ee_origin = {}, {}",
-                                    serr.ee_origin,
-                                    match serr.ee_origin {
-                                        libc::SO_EE_ORIGIN_LOCAL => "LOCAL",
-                                        libc::SO_EE_ORIGIN_ICMP => "ICMP",
-                                        libc::SO_EE_ORIGIN_ICMP6 => "ICMP6",
-                                        _ => "UNKNOWN",
-                                    }
-                                );
-                                println!("serr.ee_type = {}", serr.ee_type);
-                                println!("serr.ee_code = {}", serr.ee_code);
-                                println!("serr.ee_info = {}", serr.ee_info);
-                                println!("serr.ee_data = {}", serr.ee_data);
-
                                 if serr.ee_origin == libc::SO_EE_ORIGIN_ICMP {
                                     extended_error = Some(IcmpExtendedSocketErr::from(serr));
                                 }
