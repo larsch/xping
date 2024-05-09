@@ -124,7 +124,7 @@ impl DisplayModeTrait for DumbDisplayMode {
         if let Some(recvttl) = response.recvttl {
             print!(", recvttl={}", recvttl);
         }
-        Ok(println!(""))
+        Ok(println!())
     }
 
     fn display_timeout(&mut self, _sequence: u64) -> std::io::Result<()> {

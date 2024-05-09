@@ -39,6 +39,7 @@ impl AsMut<sockaddr> for SockAddr {
     }
 }
 
+#[allow(dead_code)]
 pub trait TryFromOsSockAddr {
     fn from_sockaddr(raw: *const sockaddr) -> Result<Self, String>
     where
@@ -47,7 +48,12 @@ pub trait TryFromOsSockAddr {
 
 impl TryFromOsSockAddr for SocketAddr {
     fn from_sockaddr(raw: *const sockaddr) -> Result<SocketAddr, String> {
-        let sockaddr_sa = unsafe { &*(raw as *const sockaddr) };
+        let sockaddr_sa = unsafe {
+            match raw.as_ref() {
+                Some(sockaddr) => sockaddr,
+                None => return Err("Invalid sockaddr".to_owned()),
+            }
+        };
         match sockaddr_sa.sa_family as AddressFamily {
             AF_INET => {
                 let sockaddr_in = unsafe { &*(raw as *const sockaddr_in) };
@@ -172,6 +178,37 @@ mod tests {
             },
         };
         let socket_addr: SocketAddr = sockaddr.try_into().unwrap();
+        assert_eq!(
+            socket_addr,
+            SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::new(1, 2, 3, 4, 5, 6, 7, 8), 8080, 0, 0))
+        );
+    }
+
+    #[test]
+    fn tryfrom_sockaddr() {
+        // Test IPv4 address
+        let sockaddr = SockAddr {
+            sin: sockaddr_in {
+                sin_family: AF_INET,
+                sin_port: 8443u16.to_be(),
+                sin_addr: in_addr::from_octets(&[127, 0, 0, 1]),
+                ..unsafe { std::mem::zeroed() }
+            },
+        };
+
+        let socket_addr: SocketAddr = SocketAddr::try_from(sockaddr).unwrap();
+        assert_eq!(socket_addr, SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), 8443)));
+
+        // Test IPv6 address
+        let sockaddr = SockAddr {
+            sin6: sockaddr_in6 {
+                sin6_family: AF_INET6,
+                sin6_port: 8080u16.to_be(),
+                sin6_addr: in6_addr::from_octets(&[0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8]),
+                ..unsafe { std::mem::zeroed() }
+            },
+        };
+        let socket_addr: SocketAddr = SocketAddr::try_from(sockaddr).unwrap();
         assert_eq!(
             socket_addr,
             SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::new(1, 2, 3, 4, 5, 6, 7, 8), 8080, 0, 0))

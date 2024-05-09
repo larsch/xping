@@ -28,8 +28,11 @@ impl PingProtocol {
     fn configure(&mut self) -> Result<(), std::io::Error> {
         let enabled: libc::c_int = 1;
         self.setsockopt(libc::SOL_IP, libc::IP_RECVERR, &enabled)?;
-        // TODO: self.setsockopt(libc::SOL_IP, libc::IP_RECVTTL, &enabled)?;
-        // TODO: self.setsockopt(libc::SOL_IP, libc::IP_RETOPTS, &enabled)?;
+        if self.target_sa.is_ipv4() {
+            self.setsockopt(libc::SOL_IP, libc::IP_RECVTTL, &enabled)?;
+        } else if self.target_sa.is_ipv6() {
+            self.setsockopt(libc::IPPROTO_IPV6, libc::IPV6_HOPLIMIT, &enabled).unwrap();
+        }
         // TODO: self.setsockopt(libc::SOL_SOCKET, libc::SO_TIMESTAMP, &enabled)?;
         Ok(())
     }
@@ -136,35 +139,6 @@ impl super::Pinger for PingProtocol {
         };
         let socket = unsafe { libc::socket(target_family, libc::SOCK_DGRAM | libc::SOCK_NONBLOCK, ipproto) };
         if socket < 0 {
-            return Err(std::io::Error::last_os_error())?;
-        }
-
-        // let optval = 1;
-        // let result = unsafe {
-        //     libc::setsockopt(
-        //         socket,
-        //         libc::SOL_IP,
-        //         libc::IP_RECVERR,
-        //         &optval as *const i32 as *const std::ffi::c_void,
-        //         std::mem::size_of::<std::ffi::c_int>() as u32,
-        //     )
-        // };
-        // if result < 0 {
-        //     return Err(std::io::Error::last_os_error())?;
-        // }
-
-        // IP_RECVTTL
-        let optval = 1;
-        let result = unsafe {
-            libc::setsockopt(
-                socket,
-                libc::SOL_IP,
-                libc::IP_RECVTTL,
-                &optval as *const i32 as *const std::ffi::c_void,
-                std::mem::size_of::<std::ffi::c_int>() as u32,
-            )
-        };
-        if result < 0 {
             return Err(std::io::Error::last_os_error())?;
         }
 
@@ -283,8 +257,13 @@ impl super::Pinger for PingProtocol {
         let mut extended_error = None;
         let mut recvmsg_flags = 0;
         let mut orig_error = None;
+
+        #[allow(unused_assignments)]
         let mut rxtime = None;
+
         let mut recvttl = None;
+
+        #[allow(unused_assignments)]
         let mut received_bytes: usize = 0;
 
         loop {
@@ -325,7 +304,7 @@ impl super::Pinger for PingProtocol {
             } else {
                 received_bytes = result as usize;
                 let mut cmsg = unsafe { libc::CMSG_FIRSTHDR(&msghdr) };
-                while cmsg != std::ptr::null_mut() {
+                while !cmsg.is_null() {
                     let cmsg_type = unsafe { (*cmsg).cmsg_type };
 
                     let dataptr = unsafe { libc::CMSG_DATA(cmsg) };
@@ -368,7 +347,7 @@ impl super::Pinger for PingProtocol {
                 recvttl,
             }))
         } else {
-            let original_message = &buf[..received_bytes as usize];
+            let original_message = &buf[..received_bytes];
 
             if let Some(extended_error) = extended_error {
                 Ok(super::IcmpResult::RecvError(super::RecvError {

@@ -1,3 +1,7 @@
+mod cmsghdr;
+
+use cmsghdr::*;
+
 use std::{
     net::{Ipv4Addr, Ipv6Addr, SocketAddr},
     process::abort,
@@ -88,7 +92,6 @@ impl AsIpv6Addr for WinSock::IN6_ADDR {
     }
 }
 
-use crossterm::terminal::WindowSize;
 use libc::c_void;
 use windows::{
     core::PSTR,
@@ -109,6 +112,7 @@ pub struct PingProtocol {
     target: SocketAddr,
     length: usize,
     wsarecvmsg: WinSock::LPFN_WSARECVMSG,
+    control_buffer: [u8; 512],
 }
 
 impl Drop for PingProtocol {
@@ -170,7 +174,7 @@ impl super::Pinger for PingProtocol {
         let recvmsg_function_pointer =
             unsafe { std::mem::transmute::<*const std::ffi::c_void, WinSock::LPFN_WSARECVMSG>(recvmsg_function_pointer) };
 
-        Ok(PingProtocol {
+        let ping = PingProtocol {
             socket,
             send_packet: Vec::with_capacity(8 + length),
             recv_overlapped: Default::default(),
@@ -180,7 +184,14 @@ impl super::Pinger for PingProtocol {
             recv_fromlen: 0,
             length,
             wsarecvmsg: recvmsg_function_pointer,
-        })
+            control_buffer: [0u8; 512],
+        };
+
+        let enabled: u32 = 1;
+        ping.setsockopt(WinSock::IPPROTO_IP.0, WinSock::IP_RECVTTL, &enabled)?;
+        ping.setsockopt(WinSock::IPPROTO_IPV6.0, WinSock::IPV6_HOPLIMIT, &enabled)?;
+
+        Ok(ping)
     }
 
     fn set_ttl(&mut self, ttl: u8) -> Result<(), std::io::Error> {
@@ -243,7 +254,7 @@ impl super::Pinger for PingProtocol {
     }
 
     fn recv(&mut self, timeout: Duration) -> Result<super::IcmpResult, std::io::Error> {
-        let recv_wsabuf = [WinSock::WSABUF {
+        let mut recv_wsabuf = [WinSock::WSABUF {
             len: self.recv_buffer.len() as u32,
             buf: PSTR::from_raw(self.recv_buffer.as_mut_ptr()),
         }];
@@ -259,27 +270,44 @@ impl super::Pinger for PingProtocol {
 
             self.recv_overlapped.hEvent = unsafe { WinSock::WSACreateEvent() }.unwrap();
 
-            let result = unsafe {
-                WinSock::WSARecvFrom(
-                    self.socket,
-                    &recv_wsabuf,
-                    Some(&mut bytes_received as *mut u32),
-                    &mut flags as *mut u32,
-                    Some(self.recv_from.as_mut()),
-                    Some(&mut self.recv_fromlen),
-                    Some(&mut self.recv_overlapped as *mut OVERLAPPED),
-                    None,
-                )
+            let result = if self.wsarecvmsg.is_some() {
+                let mut msg = WinSock::WSAMSG {
+                    name: self.recv_from.as_mut(),
+                    namelen: self.recv_fromlen,
+                    lpBuffers: recv_wsabuf.as_mut_ptr(),
+                    dwBufferCount: 1,
+                    Control: WinSock::WSABUF {
+                        len: self.control_buffer.len() as u32,
+                        buf: PSTR::from_raw(self.control_buffer.as_mut_ptr()),
+                    },
+                    dwFlags: 0,
+                };
+                unsafe { (self.wsarecvmsg.unwrap())(self.socket, &mut msg, &mut bytes_received, &mut self.recv_overlapped, None) }
+            } else {
+                unsafe {
+                    WinSock::WSARecvFrom(
+                        self.socket,
+                        &recv_wsabuf,
+                        Some(&mut bytes_received as *mut u32),
+                        &mut flags as *mut u32,
+                        Some(self.recv_from.as_mut()),
+                        Some(&mut self.recv_fromlen),
+                        Some(&mut self.recv_overlapped as *mut OVERLAPPED),
+                        None,
+                    )
+                }
             };
 
             match result {
                 0 => {
+                    println!("completed immediately");
+
                     // The operation completed immediately
                     unsafe { WinSock::WSACloseEvent(self.recv_overlapped.hEvent) }.unwrap();
 
                     self.recv_overlapped.hEvent = HANDLE::default();
                     return Ok(super::IcmpResult::IcmpPacket(super::IcmpPacket {
-                        addr: self.recv_from.clone().try_into().unwrap(),
+                        addr: self.recv_from.try_into().unwrap(),
                         message: self.complete_recv_from(bytes_received as usize).unwrap(),
                         time: Instant::now(),
                         recvttl: None,
@@ -321,14 +349,10 @@ impl super::Pinger for PingProtocol {
 
                 unsafe { WSACloseEvent(self.recv_overlapped.hEvent) }.unwrap();
                 self.recv_overlapped.hEvent = HANDLE::default();
-                let sa: Result<SocketAddr, String> = self.recv_from.clone().try_into();
 
-                Ok(super::IcmpResult::IcmpPacket(super::IcmpPacket {
-                    addr: sa.unwrap(),
-                    message: self.complete_recv_from(bytes_received as usize).unwrap(),
-                    time: Instant::now(),
-                    recvttl: None,
-                }))
+                let sa: Result<SocketAddr, String> = self.recv_from.try_into();
+
+                self.complete_recv(sa, bytes_received)
             }
             _ => panic!(),
         }
@@ -357,12 +381,59 @@ impl PingProtocol {
         Ok(())
     }
 
-    fn complete_recv_from(&self, recv_fromlen: usize) -> Option<super::IcmpMessage> {
+    fn complete_recv_from(&mut self, recv_fromlen: usize) -> Option<super::IcmpMessage> {
         let packet = &self.recv_buffer[0..recv_fromlen];
         match self.target {
             SocketAddr::V4(_) => parse_ipv4_packet(packet),
             SocketAddr::V6(_) => super::parse_icmpv6_packet(packet),
         }
+    }
+
+    fn complete_recv(&mut self, sa: Result<SocketAddr, String>, bytes_received: u32) -> Result<super::IcmpResult, std::io::Error> {
+        let mut ttl: Option<u32> = None;
+
+        if self.wsarecvmsg.is_some() {
+            // Need to set WSAMSG up again, since the one used previously is
+            // possible no longer available. Only the Control member is used.
+            let msg = WinSock::WSAMSG {
+                Control: WinSock::WSABUF {
+                    len: self.control_buffer.len() as u32,
+                    buf: PSTR::from_raw(self.control_buffer.as_mut_ptr()),
+                },
+                ..Default::default()
+            };
+
+            // let cmsghdr: *const WinSock::CMSGHDR = self.control_buffer.as_ptr() as *const WinSock::CMSGHDR;
+            let mut cmsg = cmsg_firsthdr(&msg);
+            while !cmsg.is_null() {
+                let cmsg_type = unsafe { (*cmsg).cmsg_type };
+                match cmsg_type {
+                    WinSock::IP_TTL => {
+                        ttl = Some(unsafe { *(cmsg_data(cmsg) as *const u32) });
+                    }
+                    WinSock::IPV6_HOPLIMIT => {
+                        debug_assert!(
+                            unsafe { (*cmsg).cmsg_len } as usize == std::mem::size_of::<WinSock::CMSGHDR>() + std::mem::size_of::<u32>()
+                        );
+                        ttl = Some(unsafe { *(cmsg_data(cmsg) as *const u32) });
+                    }
+                    _ => {
+                        #[cfg(debug_assertions)]
+                        panic!("Unknown cmsg_type: {:x}", cmsg_type);
+                    }
+                }
+
+                cmsg = cmsg_nxthdr(&msg, cmsg);
+            }
+            // println!("cmsghdr.first() = {:p}", cmsghdr.first());
+        }
+
+        Ok(super::IcmpResult::IcmpPacket(super::IcmpPacket {
+            addr: sa.unwrap(),
+            message: self.complete_recv_from(bytes_received as usize).unwrap(),
+            time: Instant::now(),
+            recvttl: ttl,
+        }))
     }
 }
 

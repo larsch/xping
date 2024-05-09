@@ -91,8 +91,10 @@ pub struct IcmpMessage {
 #[derive(Debug)]
 pub enum IcmpResult {
     IcmpPacket(IcmpPacket),
+    #[allow(dead_code)]
     RecvError(RecvError),
     Timeout,
+    #[allow(dead_code)]
     Interrupted,
 }
 
@@ -392,6 +394,47 @@ mod tests {
         assert_eq!(packet.addr, target, "Packet source address must be the target address");
     }
 
+    #[test]
+    fn ping_google_ipv4_recvttl() -> Result<(), Box<dyn std::error::Error>> {
+        let addrs = dns_lookup::lookup_host("google.com")?;
+        let addr = addrs.iter().find(|addr| addr.is_ipv4()).unwrap();
+        let target = SocketAddr::new(*addr, 0);
+        let mut pinger = PingProtocol::new(target, 64)?;
+        let timestamp = 0x4321fedcu64;
+        let sequence = 0xde42u16;
+        pinger.send(sequence, timestamp)?;
+        let packet = pinger.recv(std::time::Duration::from_secs(1))?;
+        assert!(matches!(packet, IcmpResult::IcmpPacket(_)));
+        let packet = match packet {
+            IcmpResult::IcmpPacket(packet) => packet,
+            _ => unreachable!(),
+        };
+        assert!(packet.recvttl.is_some());
+        assert!(packet.recvttl.unwrap() <= 255);
+        Ok(())
+    }
+
+    #[test]
+    fn ping_google_ipv6_recvttl() -> Result<(), Box<dyn std::error::Error>> {
+        let addrs = dns_lookup::lookup_host("google.com")?;
+        let addr = addrs.iter().find(|addr| addr.is_ipv6()).unwrap();
+        let target = SocketAddr::new(*addr, 0);
+        let mut pinger = PingProtocol::new(target, 64)?;
+        let timestamp = 0x4321fedcu64;
+        let sequence = 0xde42u16;
+        pinger.send(sequence, timestamp)?;
+        let packet = pinger.recv(std::time::Duration::from_secs(1))?;
+        assert!(matches!(packet, IcmpResult::IcmpPacket(_)));
+        let packet = match packet {
+            IcmpResult::IcmpPacket(packet) => packet,
+            _ => unreachable!(),
+        };
+        assert!(packet.recvttl.is_some());
+        assert!(packet.recvttl.unwrap() <= 255);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_ttl_ipv4() -> Result<(), Box<dyn std::error::Error>> {
         let addrs = dns_lookup::lookup_host("google.com")?;
