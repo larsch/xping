@@ -49,6 +49,7 @@ pub fn cmsg_data(cmsg: *mut CMSGHDR) -> *mut u8 {
 #[cfg(test)]
 mod tests {
     use windows::core::PSTR;
+    use windows::Win32::Networking::WinSock::WSABUF;
 
     use super::*;
 

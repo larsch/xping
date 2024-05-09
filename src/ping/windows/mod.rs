@@ -306,12 +306,8 @@ impl super::Pinger for PingProtocol {
                     unsafe { WinSock::WSACloseEvent(self.recv_overlapped.hEvent) }.unwrap();
 
                     self.recv_overlapped.hEvent = HANDLE::default();
-                    return Ok(super::IcmpResult::IcmpPacket(super::IcmpPacket {
-                        addr: self.recv_from.try_into().unwrap(),
-                        message: self.complete_recv_from(bytes_received as usize).unwrap(),
-                        time: Instant::now(),
-                        recvttl: None,
-                    }));
+
+                    return self.complete_recv(self.recv_from.try_into(), bytes_received);
                 }
                 SOCKET_ERROR => {
                     // The operation failed (or overlapped operation is pending)

@@ -27,11 +27,12 @@ pub struct PingProtocol {
 impl PingProtocol {
     fn configure(&mut self) -> Result<(), std::io::Error> {
         let enabled: libc::c_int = 1;
-        self.setsockopt(libc::SOL_IP, libc::IP_RECVERR, &enabled)?;
         if self.target_sa.is_ipv4() {
-            self.setsockopt(libc::SOL_IP, libc::IP_RECVTTL, &enabled)?;
+            self.setsockopt(libc::IPPROTO_IP, libc::IP_RECVERR, &enabled)?;
+            self.setsockopt(libc::IPPROTO_IP, libc::IP_RECVTTL, &enabled)?;
         } else if self.target_sa.is_ipv6() {
-            self.setsockopt(libc::IPPROTO_IPV6, libc::IPV6_HOPLIMIT, &enabled).unwrap();
+            self.setsockopt(libc::IPPROTO_IPV6, libc::IPV6_RECVERR, &enabled)?;
+            self.setsockopt(libc::IPPROTO_IPV6, libc::IPV6_RECVHOPLIMIT, &enabled).unwrap();
         }
         // TODO: self.setsockopt(libc::SOL_SOCKET, libc::SO_TIMESTAMP, &enabled)?;
         Ok(())
@@ -325,6 +326,12 @@ impl super::Pinger for PingProtocol {
                                 if serr.ee_origin == libc::SO_EE_ORIGIN_ICMP {
                                     extended_error = Some(IcmpExtendedSocketErr::from(serr));
                                 }
+                            }
+                        }
+                        libc::IPV6_HOPLIMIT => {
+                            if data.len() >= std::mem::size_of::<u32>() {
+                                let ttl = u32::from_ne_bytes(data.try_into().unwrap());
+                                recvttl = Some(ttl);
                             }
                         }
                         _ => todo!(),
