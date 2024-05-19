@@ -1,4 +1,5 @@
 mod cmsghdr;
+pub mod icmp;
 
 use cmsghdr::*;
 
@@ -71,6 +72,40 @@ impl AsIpv4Addr for WinSock::IN_ADDR {
         Ipv4Addr::new(octets.s_b1, octets.s_b2, octets.s_b3, octets.s_b4)
     }
 }
+
+pub trait FromIpv4Addr {
+    fn from_ipv4addr(ip: &Ipv4Addr) -> Self;
+}
+
+impl FromIpv4Addr for WinSock::IN_ADDR {
+    fn from_ipv4addr(ip: &Ipv4Addr) -> Self {
+        WinSock::IN_ADDR {
+            S_un: WinSock::IN_ADDR_0 {
+                S_un_b: WinSock::IN_ADDR_0_0 {
+                    s_b1: ip.octets()[0],
+                    s_b2: ip.octets()[1],
+                    s_b3: ip.octets()[2],
+                    s_b4: ip.octets()[3],
+                },
+            },
+        }
+    }
+}
+
+// pub trait FromIpv6Addr {
+//     fn from_ipv6addr(ip: &Ipv6Addr) -> Self;
+// }
+
+// impl FromIpv6Addr for WinSock::IN6_ADDR {
+//     fn from_ipv6addr(ip: &Ipv6Addr) -> Self {
+//         let octets = ip.octets();
+//         WinSock::IN6_ADDR {
+//             u: WinSock::IN6_ADDR_0 {
+//                 Byte: octets,
+//             },
+//         }
+//     }
+// }
 
 pub trait AsIpv6Addr {
     fn as_ipv6addr(&self) -> Ipv6Addr;

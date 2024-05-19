@@ -12,7 +12,7 @@ pub use linux::PingProtocol;
 mod windows;
 
 #[cfg(target_os = "windows")]
-pub use windows::PingProtocol;
+pub use windows::{icmp::IcmpProtocol, PingProtocol};
 
 pub trait Pinger {
     fn new(target: std::net::SocketAddr, length: usize) -> Result<Self, std::io::Error>
@@ -114,8 +114,8 @@ pub struct IcmpPacket {
 // An error that occurred while receiving an ICMP packet
 #[derive(Debug)]
 pub struct RecvError {
-    // The error that occurred
-    pub error: std::io::Error,
+    // The OS error that occurred (if any)
+    pub error: Option<std::io::Error>,
     // The source address if available (The host that sent the error message)
     pub addr: Option<SocketAddr>,
     // The original ICMP message if included in the error
@@ -291,6 +291,13 @@ fn parse_icmpv6_packet(packet: &[u8]) -> Option<IcmpMessage> {
     })
 }
 
+fn construct_icmp_payload(payload: &mut [u8], timestamp: u64) {
+    payload[0..8].copy_from_slice(&timestamp.to_be_bytes());
+    for (i, item) in payload.iter_mut().enumerate().skip(8) {
+        *item = i as u8;
+    }
+}
+
 fn construct_icmp_packet(packet: &mut [u8], icmp_type: u8, code: u8, id: u16, seq: u16, timestamp: u64) {
     packet[0] = icmp_type; // echo request
     packet[1] = code;
@@ -298,11 +305,7 @@ fn construct_icmp_packet(packet: &mut [u8], icmp_type: u8, code: u8, id: u16, se
     packet[3] = 0; // checksum lsb
     packet[4..6].copy_from_slice(&id.to_be_bytes());
     packet[6..8].copy_from_slice(&seq.to_be_bytes());
-    packet[8..16].copy_from_slice(&timestamp.to_be_bytes());
-
-    for (i, item) in packet.iter_mut().enumerate().skip(16) {
-        *item = i as u8;
-    }
+    construct_icmp_payload(&mut packet[8..], timestamp);
 
     unsafe {
         // Calculate checksum
@@ -336,9 +339,19 @@ mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 
     #[test]
-    fn test_ping() {
+    fn test_ping_pingprotocol() {
+        test_ping::<super::PingProtocol>();
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_ping_icmpprotocol() {
+        test_ping::<super::IcmpProtocol>();
+    }
+
+    fn test_ping<T: Pinger>() {
         let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        let mut pinger = PingProtocol::new(target, 64).unwrap();
+        let mut pinger = T::new(target, 64).unwrap();
         let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
         pinger.send(sequence, timestamp).unwrap();
@@ -364,9 +377,19 @@ mod tests {
     }
 
     #[test]
-    fn test_ping_ipv6() {
+    fn test_ping_ipv6_icmp_socket() {
+        test_ping_ipv6::<super::PingProtocol>();
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn test_ping_ipv6_iphelper() {
+        test_ping_ipv6::<super::IcmpProtocol>();
+    }
+
+    fn test_ping_ipv6<T: Pinger>() {
         let target = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0);
-        let mut pinger = PingProtocol::new(target, 64).unwrap();
+        let mut pinger = T::new(target, 64).unwrap();
         let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
         pinger.send(sequence, timestamp).unwrap();
@@ -395,11 +418,21 @@ mod tests {
     }
 
     #[test]
-    fn ping_google_ipv4_recvttl() -> Result<(), Box<dyn std::error::Error>> {
+    fn ping_google_ipv4_recvttl_pingprotocol() -> Result<(), Box<dyn std::error::Error>> {
+        ping_google_ipv4_recvttl::<super::PingProtocol>()
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn ping_google_ipv4_recvttl_icmpprotocol() -> Result<(), Box<dyn std::error::Error>> {
+        ping_google_ipv4_recvttl::<super::IcmpProtocol>()
+    }
+
+    fn ping_google_ipv4_recvttl<T: Pinger>() -> Result<(), Box<dyn std::error::Error>> {
         let addrs = dns_lookup::lookup_host("google.com")?;
         let addr = addrs.iter().find(|addr| addr.is_ipv4()).unwrap();
         let target = SocketAddr::new(*addr, 0);
-        let mut pinger = PingProtocol::new(target, 64)?;
+        let mut pinger = T::new(target, 64)?;
         let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
         pinger.send(sequence, timestamp)?;
@@ -415,11 +448,15 @@ mod tests {
     }
 
     #[test]
-    fn ping_google_ipv6_recvttl() -> Result<(), Box<dyn std::error::Error>> {
+    fn ping_google_ipv6_recvttl_icmp_socket() {
+        ping_google_ipv6_recvttl::<super::PingProtocol>().unwrap();
+    }
+
+    fn ping_google_ipv6_recvttl<T: Pinger>() -> Result<(), Box<dyn std::error::Error>> {
         let addrs = dns_lookup::lookup_host("google.com")?;
         let addr = addrs.iter().find(|addr| addr.is_ipv6()).unwrap();
         let target = SocketAddr::new(*addr, 0);
-        let mut pinger = PingProtocol::new(target, 64)?;
+        let mut pinger = T::new(target, 64)?;
         let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
         pinger.send(sequence, timestamp)?;
@@ -436,11 +473,21 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn test_ttl_ipv4() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_ttl_ipv4_pingprotocol() -> Result<(), Box<dyn std::error::Error>> {
+        test_ttl_ipv4::<super::PingProtocol>()
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_ttl_ipv4_icmpprotocol() -> Result<(), Box<dyn std::error::Error>> {
+        test_ttl_ipv4::<super::IcmpProtocol>()
+    }
+
+    fn test_ttl_ipv4<T: Pinger>() -> Result<(), Box<dyn std::error::Error>> {
         let addrs = dns_lookup::lookup_host("google.com")?;
         let addr = addrs.iter().find(|addr| addr.is_ipv4()).unwrap();
         let target = SocketAddr::new(*addr, 0);
-        let mut pinger = PingProtocol::new(target, 64)?;
+        let mut pinger = T::new(target, 64)?;
         let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
         pinger.set_ttl(4)?;
@@ -455,6 +502,43 @@ mod tests {
         assert_eq!(err.icmp_code, Some(0));
         assert!(err.offender.is_some());
         assert!(err.offender.unwrap().is_ipv4());
+        Ok(())
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn test_ttl_ipv6_icmpprotocol() -> Result<(), Box<dyn std::error::Error>> {
+        test_ttl_ipv6::<super::IcmpProtocol>()
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn test_ttl_ipv6_pingprotocol() -> Result<(), Box<dyn std::error::Error>> {
+        test_ttl_ipv6::<super::PingProtocol>()
+    }
+
+    fn test_ttl_ipv6<T: Pinger>() -> Result<(), Box<dyn std::error::Error>> {
+        let addrs = dns_lookup::lookup_host("google.com")?;
+        let addr = addrs.iter().find(|addr| addr.is_ipv6()).unwrap();
+        let target = SocketAddr::new(*addr, 0);
+        let mut pinger = T::new(target, 64)?;
+        let timestamp = 0x4321fedcu64;
+        let sequence = 0xde42u16;
+        pinger.set_ttl(4)?;
+        pinger.send(sequence, timestamp)?;
+        let packet = pinger.recv(std::time::Duration::from_secs(1))?;
+        assert!(matches!(packet, IcmpResult::RecvError(_)));
+        let err = match packet {
+            IcmpResult::RecvError(err) => err,
+            _ => unreachable!(),
+        };
+        #[cfg(target_os = "windows")]
+        assert_eq!(err.icmp_type, Some(11));
+        #[cfg(not(target_os = "windows"))]
+        assert_eq!(err.icmp_type, Some(3));
+        assert_eq!(err.icmp_code, Some(0));
+        assert!(err.offender.is_some());
+        assert!(err.offender.unwrap().is_ipv6());
         Ok(())
     }
 }

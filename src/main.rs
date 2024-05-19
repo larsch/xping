@@ -10,6 +10,16 @@ use std::{
 
 use crate::{display::DisplayModeTrait, ping::Pinger};
 
+#[derive(clap::ValueEnum, Clone, Debug, Default)]
+enum Api {
+    /// Use ICMP datagram sockets
+    #[default]
+    IcmpSocket,
+    /// Use Windows IP Helper API
+    #[cfg(windows)]
+    Iphelper,
+}
+
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
@@ -44,6 +54,10 @@ struct Args {
     /// Time to live
     #[arg(short, long, default_value_t = 64)]
     ttl: u8,
+
+    /// API to use
+    #[arg(short, long, default_value = "icmp-socket")]
+    api: Api,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -67,7 +81,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut next_send = std::time::Instant::now();
-    let mut ping_protocol = ping::PingProtocol::new(target_sa, args.length)?;
+    let mut ping_protocol: Box<dyn Pinger> = match args.api {
+        Api::IcmpSocket => Box::new(ping::PingProtocol::new(target_sa, args.length)?),
+        #[cfg(windows)]
+        Api::Iphelper => Box::new(ping::IcmpProtocol::new(target_sa, args.length)?),
+    };
 
     ping_protocol.set_ttl(args.ttl).expect("Failed to set TTL");
 

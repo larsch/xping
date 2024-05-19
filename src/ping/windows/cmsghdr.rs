@@ -104,7 +104,7 @@ mod tests {
 
     #[test]
     fn test_cmsg_next_on_array_of_three_cmsg() {
-        let mut buffer = [0u8; 128];
+        let buffer = [0u8; 128];
         let mut cmsg: *mut CMSGHDR = buffer.as_ptr() as *mut _;
 
         unsafe {
@@ -132,12 +132,12 @@ mod tests {
 
         unsafe {
             let cmsg = cmsg_firsthdr(&msg);
-            assert_eq!(unsafe { cmsg.byte_offset_from(buffer.as_ptr()) }, 0);
+            assert_eq!(cmsg.byte_offset_from(buffer.as_ptr()), 0);
             assert_eq!((*cmsg).cmsg_type, 0);
 
             let cmsg = cmsg_nxthdr(&msg, cmsg);
             assert_ne!(cmsg, null_mut());
-            assert_eq!(unsafe { cmsg.byte_offset_from(buffer.as_ptr()) }, size_of::<CMSGHDR>() as isize);
+            assert_eq!(cmsg.byte_offset_from(buffer.as_ptr()), size_of::<CMSGHDR>() as isize);
             assert_eq!((*cmsg).cmsg_type, 1);
             assert_eq!((*cmsg).cmsg_len, size_of::<CMSGHDR>() + 1);
             let datasize = cmsg_align(1);
@@ -145,7 +145,7 @@ mod tests {
             let cmsg = cmsg_nxthdr(&msg, cmsg);
             assert_ne!(cmsg, null_mut());
             assert_eq!(
-                unsafe { cmsg.byte_offset_from(buffer.as_ptr()) },
+                cmsg.byte_offset_from(buffer.as_ptr()),
                 2 * size_of::<CMSGHDR>() as isize + datasize as isize
             );
             assert_eq!((*cmsg).cmsg_type, 3);
@@ -155,7 +155,7 @@ mod tests {
             let cmsg = cmsg_nxthdr(&msg, cmsg);
             assert_ne!(cmsg, null_mut());
             assert_eq!(
-                unsafe { cmsg.byte_offset_from(buffer.as_ptr()) },
+                cmsg.byte_offset_from(buffer.as_ptr()),
                 3 * size_of::<CMSGHDR>() as isize + datasize as isize
             );
             assert_eq!((*cmsg).cmsg_type, 7);
@@ -165,12 +165,12 @@ mod tests {
             let cmsg = cmsg_nxthdr(&msg, cmsg);
             assert_ne!(cmsg, null_mut());
             assert_eq!(
-                unsafe { cmsg.byte_offset_from(buffer.as_ptr()) },
+                cmsg.byte_offset_from(buffer.as_ptr()),
                 4 * size_of::<CMSGHDR>() as isize + datasize as isize
             );
             assert_eq!((*cmsg).cmsg_type, 8);
             assert_eq!((*cmsg).cmsg_len, size_of::<CMSGHDR>() + 8);
-            let datasize = datasize + cmsg_align(8);
+            let _datasize = datasize + cmsg_align(8);
 
             let cmsg = cmsg_nxthdr(&msg, cmsg);
             assert_eq!(cmsg, null_mut());

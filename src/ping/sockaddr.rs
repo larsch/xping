@@ -6,10 +6,15 @@ use crate::ping::linux::types::*;
 #[cfg(target_os = "windows")]
 use crate::ping::windows::types::*;
 
+/// Socket address
+///
+/// This is a wrapper around `sockaddr` and its variants `sockaddr_in` and
+/// `sockaddr_in6`. It is used to convert between `SocketAddr` and `sockaddr` in
+/// a platform-independent way.
 #[derive(Clone, Copy)]
 pub union SockAddr {
-    sa: sockaddr,
-    sin: sockaddr_in,
+    pub sa: sockaddr,
+    pub sin: sockaddr_in,
     pub sin6: sockaddr_in6,
 }
 
@@ -90,35 +95,43 @@ impl TryFrom<SockAddr> for SocketAddr {
     }
 }
 
+impl From<SocketAddrV6> for SockAddr {
+    fn from(value: SocketAddrV6) -> Self {
+        let ip = value.ip().octets();
+        let port = value.port().to_be();
+        let sockaddr_in6 = unsafe {
+            sockaddr_in6 {
+                sin6_family: AF_INET6,
+                sin6_port: port,
+                sin6_addr: in6_addr::from_octets(&ip),
+                ..std::mem::zeroed()
+            }
+        };
+        SockAddr { sin6: sockaddr_in6 }
+    }
+}
+
+impl From<SocketAddrV4> for SockAddr {
+    fn from(value: SocketAddrV4) -> Self {
+        let ip = value.ip().octets();
+        let port = value.port().to_be();
+        let sockaddr_in = unsafe {
+            sockaddr_in {
+                sin_family: AF_INET,
+                sin_port: port,
+                sin_addr: in_addr::from_octets(&ip),
+                ..std::mem::zeroed()
+            }
+        };
+        SockAddr { sin: sockaddr_in }
+    }
+}
+
 impl From<SocketAddr> for SockAddr {
     fn from(addr: SocketAddr) -> Self {
         match addr {
-            SocketAddr::V4(v4addr) => {
-                let ip = v4addr.ip().octets();
-                let port = v4addr.port().to_be();
-                let sockaddr_in = unsafe {
-                    sockaddr_in {
-                        sin_family: AF_INET,
-                        sin_port: port,
-                        sin_addr: in_addr::from_octets(&ip),
-                        ..std::mem::zeroed()
-                    }
-                };
-                SockAddr { sin: sockaddr_in }
-            }
-            SocketAddr::V6(v6addr) => {
-                let ip = v6addr.ip().octets();
-                let port = v6addr.port().to_be();
-                let sockaddr_in6 = unsafe {
-                    sockaddr_in6 {
-                        sin6_family: AF_INET6,
-                        sin6_port: port,
-                        sin6_addr: in6_addr::from_octets(&ip),
-                        ..std::mem::zeroed()
-                    }
-                };
-                SockAddr { sin6: sockaddr_in6 }
-            }
+            SocketAddr::V4(v4addr) => v4addr.into(),
+            SocketAddr::V6(v6addr) => v6addr.into(),
         }
     }
 }

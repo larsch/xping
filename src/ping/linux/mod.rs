@@ -320,10 +320,11 @@ impl super::Pinger for PingProtocol {
                                 recvttl = Some(ttl);
                             }
                         }
-                        libc::IP_RECVERR => {
+                        libc::IP_RECVERR | libc::IPV6_RECVERR => {
                             if data.len() >= std::mem::size_of::<libc::sock_extended_err>() {
                                 let serr = unsafe { &*(dataptr as *const libc::sock_extended_err) };
-                                if serr.ee_origin == libc::SO_EE_ORIGIN_ICMP {
+                                dbg!("srr: {:?}", serr);
+                                if serr.ee_origin == libc::SO_EE_ORIGIN_ICMP || serr.ee_origin == libc::SO_EE_ORIGIN_ICMP6 {
                                     extended_error = Some(IcmpExtendedSocketErr::from(serr));
                                 }
                             }
@@ -334,7 +335,7 @@ impl super::Pinger for PingProtocol {
                                 recvttl = Some(ttl);
                             }
                         }
-                        _ => todo!(),
+                        _ => todo!("{:?}", cmsg_type),
                     }
                     cmsg = unsafe { libc::CMSG_NXTHDR(&msghdr, cmsg) };
                 }
@@ -359,7 +360,7 @@ impl super::Pinger for PingProtocol {
             if let Some(extended_error) = extended_error {
                 Ok(super::IcmpResult::RecvError(super::RecvError {
                     addr: Some(addr.try_into().map_err(|_| std::io::Error::from_raw_os_error(0))?),
-                    error: std::io::Error::from_raw_os_error(extended_error.errno),
+                    error: Some(std::io::Error::from_raw_os_error(extended_error.errno)),
                     icmp_type: Some(extended_error.icmp_type),
                     icmp_code: Some(extended_error.icmp_code),
                     offender: extended_error.offender,
@@ -372,7 +373,7 @@ impl super::Pinger for PingProtocol {
             } else {
                 Ok(super::IcmpResult::RecvError(super::RecvError {
                     addr: Some(addr.try_into().map_err(|_| std::io::Error::from_raw_os_error(0))?),
-                    error: orig_error.unwrap(),
+                    error: Some(orig_error.unwrap()),
                     icmp_type: None,
                     icmp_code: None,
                     offender: None,
