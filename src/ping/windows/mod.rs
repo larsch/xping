@@ -335,8 +335,6 @@ impl super::Pinger for PingProtocol {
 
             match result {
                 0 => {
-                    println!("completed immediately");
-
                     // The operation completed immediately
                     unsafe { WinSock::WSACloseEvent(self.recv_overlapped.hEvent) }.unwrap();
 

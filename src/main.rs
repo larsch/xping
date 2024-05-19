@@ -153,6 +153,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         display::DisplayMode::Dumb => Box::new(display::DumbDisplayMode::new(columns, rows)),
         display::DisplayMode::CharGraph => Box::new(display::CharGraphDisplayMode::new(columns, rows)),
         display::DisplayMode::Debug => Box::new(display::DebugDisplayMode::new(columns, rows)),
+        display::DisplayMode::None => Box::new(display::NoneDisplayMode::new(columns, rows))
     };
 
     let icmp_timeout = std::time::Duration::from_millis(args.timeout);
