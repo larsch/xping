@@ -1,10 +1,9 @@
 mod display;
 mod ping;
-
 use clap::Parser;
 use std::{
     collections::VecDeque,
-    net,
+    net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6},
     time::{Duration, Instant},
 };
 
@@ -75,7 +74,7 @@ struct ForceIp {
     ipv6: bool,
 }
 
-fn lookup_host(host: &str, force_ip: &ForceIp) -> Option<net::IpAddr> {
+fn lookup_host(host: &str, force_ip: &ForceIp) -> Option<IpAddr> {
     let target = dns_lookup::lookup_host(host).ok()?;
     let target = if force_ip.ipv4 {
         target.iter().find(|ip| ip.is_ipv4())
@@ -111,8 +110,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
     let target_sa = match target {
-        net::IpAddr::V4(v4addr) => net::SocketAddr::V4(net::SocketAddrV4::new(v4addr, 58)),
-        net::IpAddr::V6(v6addr) => net::SocketAddr::V6(net::SocketAddrV6::new(v6addr, 58, 0, 0)),
+        IpAddr::V4(v4addr) => SocketAddr::V4(SocketAddrV4::new(v4addr, 58)),
+        IpAddr::V6(v6addr) => SocketAddr::V6(SocketAddrV6::new(v6addr, 58, 0, 0)),
     };
 
     let interval = match args.rate {
@@ -280,4 +279,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     display_mode.close()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lookup_host() {
+        assert!(lookup_host("localhost", &ForceIp { ipv4: false, ipv6: false }).is_some());
+        assert!(lookup_host("localhost", &ForceIp { ipv4: true, ipv6: false }).is_some());
+        assert!(lookup_host("localhost", &ForceIp { ipv4: true, ipv6: false }).unwrap().is_ipv4());
+        assert!(lookup_host("localhost", &ForceIp { ipv4: false, ipv6: true }).is_some());
+        assert!(lookup_host("localhost", &ForceIp { ipv4: false, ipv6: true }).unwrap().is_ipv6());
+    }
+
+    #[test]
+    fn test_lookup_host_no_address() {
+        assert!(lookup_host("nonexistent", &ForceIp { ipv4: false, ipv6: false }).is_none());
+    }
 }
