@@ -39,7 +39,7 @@ struct Args {
     #[arg(short = 'w', long, default_value_t = 1000)]
     timeout: u64,
 
-    /// Length
+    /// Length of ICMP payload in bytes
     #[arg(short, long, default_value_t = 64)]
     length: usize,
 
@@ -58,6 +58,33 @@ struct Args {
     /// API to use
     #[arg(short, long, default_value = "icmp-socket")]
     api: Api,
+
+    #[command(flatten)]
+    force_ip: ForceIp,
+}
+
+#[derive(Parser, Debug)]
+#[group(multiple(false))]
+struct ForceIp {
+    /// Force IPv4
+    #[arg(short = '4', long)]
+    ipv4: bool,
+
+    /// Force IPv6
+    #[arg(short = '6', long)]
+    ipv6: bool,
+}
+
+fn lookup_host(host: &str, force_ip: &ForceIp) -> Option<net::IpAddr> {
+    let target = dns_lookup::lookup_host(host).ok()?;
+    let target = if force_ip.ipv4 {
+        target.iter().find(|ip| ip.is_ipv4())
+    } else if force_ip.ipv6 {
+        target.iter().find(|ip| ip.is_ipv6())
+    } else {
+        target.first()
+    };
+    target.cloned()
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -68,11 +95,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     .expect("Error setting Ctrl-C handler");
 
     let args = Args::parse();
-    let target = dns_lookup::lookup_host(&args.target).unwrap();
-    let target = target.first().unwrap();
+
+    let target = lookup_host(&args.target, &args.force_ip);
+
+    let target = match target {
+        Some(ip) => ip,
+        None => {
+            let injection = match (args.force_ip.ipv4, args.force_ip.ipv6) {
+                (true, false) => " IPv4",
+                (false, true) => " IPv6",
+                _ => "",
+            };
+            eprintln!("No{} address found for {}", injection, args.target);
+            return Ok(());
+        }
+    };
     let target_sa = match target {
-        net::IpAddr::V4(v4addr) => net::SocketAddr::V4(net::SocketAddrV4::new(*v4addr, 58)),
-        net::IpAddr::V6(v6addr) => net::SocketAddr::V6(net::SocketAddrV6::new(*v6addr, 58, 0, 0)),
+        net::IpAddr::V4(v4addr) => net::SocketAddr::V4(net::SocketAddrV4::new(v4addr, 58)),
+        net::IpAddr::V6(v6addr) => net::SocketAddr::V6(net::SocketAddrV6::new(v6addr, 58, 0, 0)),
     };
 
     let interval = match args.rate {
@@ -124,7 +164,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let icmp_sequence = sequence as u16;
             ping_protocol.send(icmp_sequence, timestamp).unwrap();
 
-            display_mode.display_send(target, args.length, sequence)?;
+            display_mode.display_send(&target, args.length, sequence)?;
 
             attempts_left -= 1;
 
