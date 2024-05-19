@@ -6,15 +6,15 @@ mod linux;
 use std::{fmt::Display, net::SocketAddr};
 
 #[cfg(target_os = "linux")]
-pub use linux::PingProtocol;
+pub use linux::IcmpSocketApi;
 
 #[cfg(target_os = "windows")]
 mod windows;
 
 #[cfg(target_os = "windows")]
-pub use windows::{icmp::IcmpProtocol, PingProtocol};
+pub use windows::{iphelper::IpHelperApi, IcmpSocketApi};
 
-pub trait Pinger {
+pub trait IcmpApi {
     fn new(target: std::net::SocketAddr, length: usize) -> Result<Self, std::io::Error>
     where
         Self: Sized;
@@ -340,16 +340,16 @@ mod tests {
 
     #[test]
     fn test_ping_pingprotocol() {
-        test_ping::<super::PingProtocol>();
+        test_ping::<super::IcmpSocketApi>();
     }
 
     #[test]
     #[cfg(windows)]
     fn test_ping_icmpprotocol() {
-        test_ping::<super::IcmpProtocol>();
+        test_ping::<super::IpHelperApi>();
     }
 
-    fn test_ping<T: Pinger>() {
+    fn test_ping<T: IcmpApi>() {
         let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
         let mut pinger = T::new(target, 64).unwrap();
         let timestamp = 0x4321fedcu64;
@@ -378,16 +378,16 @@ mod tests {
 
     #[test]
     fn test_ping_ipv6_icmp_socket() {
-        test_ping_ipv6::<super::PingProtocol>();
+        test_ping_ipv6::<super::IcmpSocketApi>();
     }
 
     #[test]
     #[cfg(windows)]
     fn test_ping_ipv6_iphelper() {
-        test_ping_ipv6::<super::IcmpProtocol>();
+        test_ping_ipv6::<super::IpHelperApi>();
     }
 
-    fn test_ping_ipv6<T: Pinger>() {
+    fn test_ping_ipv6<T: IcmpApi>() {
         let target = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0);
         let mut pinger = T::new(target, 64).unwrap();
         let timestamp = 0x4321fedcu64;
@@ -419,16 +419,16 @@ mod tests {
 
     #[test]
     fn ping_google_ipv4_recvttl_pingprotocol() -> Result<(), Box<dyn std::error::Error>> {
-        ping_google_ipv4_recvttl::<super::PingProtocol>()
+        ping_google_ipv4_recvttl::<super::IcmpSocketApi>()
     }
 
     #[test]
     #[cfg(windows)]
     fn ping_google_ipv4_recvttl_icmpprotocol() -> Result<(), Box<dyn std::error::Error>> {
-        ping_google_ipv4_recvttl::<super::IcmpProtocol>()
+        ping_google_ipv4_recvttl::<super::IpHelperApi>()
     }
 
-    fn ping_google_ipv4_recvttl<T: Pinger>() -> Result<(), Box<dyn std::error::Error>> {
+    fn ping_google_ipv4_recvttl<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
         let addrs = dns_lookup::lookup_host("google.com")?;
         let addr = addrs.iter().find(|addr| addr.is_ipv4()).unwrap();
         let target = SocketAddr::new(*addr, 0);
@@ -449,10 +449,10 @@ mod tests {
 
     #[test]
     fn ping_google_ipv6_recvttl_icmp_socket() {
-        ping_google_ipv6_recvttl::<super::PingProtocol>().unwrap();
+        ping_google_ipv6_recvttl::<super::IcmpSocketApi>().unwrap();
     }
 
-    fn ping_google_ipv6_recvttl<T: Pinger>() -> Result<(), Box<dyn std::error::Error>> {
+    fn ping_google_ipv6_recvttl<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
         let addrs = dns_lookup::lookup_host("google.com")?;
         let addr = addrs.iter().find(|addr| addr.is_ipv6()).unwrap();
         let target = SocketAddr::new(*addr, 0);
@@ -474,16 +474,16 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn test_ttl_ipv4_pingprotocol() -> Result<(), Box<dyn std::error::Error>> {
-        test_ttl_ipv4::<super::PingProtocol>()
+        test_ttl_ipv4::<super::IcmpSocketApi>()
     }
 
     #[cfg(target_os = "windows")]
     #[test]
     fn test_ttl_ipv4_icmpprotocol() -> Result<(), Box<dyn std::error::Error>> {
-        test_ttl_ipv4::<super::IcmpProtocol>()
+        test_ttl_ipv4::<super::IpHelperApi>()
     }
 
-    fn test_ttl_ipv4<T: Pinger>() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_ttl_ipv4<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
         let addrs = dns_lookup::lookup_host("google.com")?;
         let addr = addrs.iter().find(|addr| addr.is_ipv4()).unwrap();
         let target = SocketAddr::new(*addr, 0);
@@ -508,16 +508,16 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn test_ttl_ipv6_icmpprotocol() -> Result<(), Box<dyn std::error::Error>> {
-        test_ttl_ipv6::<super::IcmpProtocol>()
+        test_ttl_ipv6::<super::IpHelperApi>()
     }
 
     #[cfg(target_os = "linux")]
     #[test]
     fn test_ttl_ipv6_pingprotocol() -> Result<(), Box<dyn std::error::Error>> {
-        test_ttl_ipv6::<super::PingProtocol>()
+        test_ttl_ipv6::<super::IcmpSocketApi>()
     }
 
-    fn test_ttl_ipv6<T: Pinger>() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_ttl_ipv6<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
         let addrs = dns_lookup::lookup_host("google.com")?;
         let addr = addrs.iter().find(|addr| addr.is_ipv6()).unwrap();
         let target = SocketAddr::new(*addr, 0);

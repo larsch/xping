@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{display::DisplayModeTrait, ping::Pinger};
+use crate::{display::DisplayModeTrait, ping::IcmpApi};
 
 #[derive(clap::ValueEnum, Clone, Debug, Default)]
 enum Api {
@@ -120,10 +120,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut next_send = std::time::Instant::now();
-    let mut ping_protocol: Box<dyn Pinger> = match args.api {
-        Api::IcmpSocket => Box::new(ping::PingProtocol::new(target_sa, args.length)?),
+    let mut ping_protocol: Box<dyn ping::IcmpApi> = match args.api {
+        Api::IcmpSocket => Box::new(ping::IcmpSocketApi::new(target_sa, args.length)?),
         #[cfg(windows)]
-        Api::Iphelper => Box::new(ping::IcmpProtocol::new(target_sa, args.length)?),
+        Api::Iphelper => Box::new(ping::IpHelperApi::new(target_sa, args.length)?),
     };
 
     ping_protocol.set_ttl(args.ttl).expect("Failed to set TTL");
@@ -153,7 +153,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         display::DisplayMode::Dumb => Box::new(display::DumbDisplayMode::new(columns, rows)),
         display::DisplayMode::CharGraph => Box::new(display::CharGraphDisplayMode::new(columns, rows)),
         display::DisplayMode::Debug => Box::new(display::DebugDisplayMode::new(columns, rows)),
-        display::DisplayMode::None => Box::new(display::NoneDisplayMode::new(columns, rows))
+        display::DisplayMode::None => Box::new(display::NoneDisplayMode::new(columns, rows)),
     };
 
     let icmp_timeout = std::time::Duration::from_millis(args.timeout);

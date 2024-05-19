@@ -8,7 +8,7 @@ use windows::Win32::{
 
 use crate::ping::{sockaddr::SockAddr, IcmpMessage};
 
-pub struct IcmpProtocol {
+pub struct IpHelperApi {
     icmp_handle: HANDLE,
     target: std::net::SocketAddr,
     event_handles: Vec<HANDLE>,
@@ -38,7 +38,7 @@ impl From<Ipv6AddressEx> for SocketAddrV6 {
     }
 }
 
-impl crate::ping::Pinger for IcmpProtocol {
+impl crate::ping::IcmpApi for IpHelperApi {
     fn new(target: std::net::SocketAddr, length: usize) -> Result<Self, std::io::Error> {
         let icmp_handle = match target {
             std::net::SocketAddr::V4(_) => unsafe { IpHelper::IcmpCreateFile() }?,

@@ -9,8 +9,9 @@ use crate::ping::windows::types::*;
 /// Socket address
 ///
 /// This is a wrapper around `sockaddr` and its variants `sockaddr_in` and
-/// `sockaddr_in6`. It is used to convert between `SocketAddr` and `sockaddr` in
-/// a platform-independent way.
+/// `sockaddr_in6`. It is used to convert between `SocketAddr` and OS `sockaddr`
+/// in a platform-independent way. It provides enough space to store both IPv4
+/// and IPv6 addresses.
 #[derive(Clone, Copy)]
 pub union SockAddr {
     pub sa: sockaddr,
