@@ -1,6 +1,6 @@
+use super::IcmpExtendedSocketErr;
 use crate::ping::sockaddr::SockAddr;
 use std::net::SocketAddr;
-use super::IcmpExtendedSocketErr;
 
 pub struct IcmpSocketApi {
     socket: i32,
