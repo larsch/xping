@@ -7,7 +7,9 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{display::DisplayModeTrait, ping::IcmpApi};
+use crate::display::DisplayModeTrait;
+
+use crate::ping::IcmpApi;
 
 #[derive(clap::ValueEnum, Clone, Debug, Default)]
 enum Api {
@@ -16,6 +18,7 @@ enum Api {
     IcmpSocket,
     /// Use Windows IP Helper API
     #[cfg(windows)]
+    #[cfg(feature = "iphelper")]
     Iphelper,
 }
 
@@ -121,9 +124,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut next_send = std::time::Instant::now();
     let mut ping_protocol: Box<dyn ping::IcmpApi> = match args.api {
-        Api::IcmpSocket => Box::new(ping::IcmpSocketApi::new(target_sa, args.length)?),
+        Api::IcmpSocket => Box::new(ping::IcmpSocketApi::new()?),
         #[cfg(windows)]
-        Api::Iphelper => Box::new(ping::IpHelperApi::new(target_sa, args.length)?),
+        #[cfg(feature = "iphelper")]
+        Api::Iphelper => Box::new(ping::IpHelperApi::new()?),
     };
 
     ping_protocol.set_ttl(args.ttl).expect("Failed to set TTL");
@@ -162,7 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if attempts_left > 0 {
             let timestamp = time_reference.elapsed().as_nanos() as u64;
             let icmp_sequence = sequence as u16;
-            ping_protocol.send(icmp_sequence, timestamp).unwrap();
+            ping_protocol.send(target_sa.ip(), args.length, icmp_sequence, timestamp).unwrap();
 
             display_mode.display_send(&target, args.length, sequence)?;
 
@@ -291,7 +295,9 @@ mod tests {
         assert!(lookup_host("localhost", &ForceIp { ipv4: false, ipv6: false }).is_some());
         assert!(lookup_host("localhost", &ForceIp { ipv4: true, ipv6: false }).is_some());
         assert!(lookup_host("localhost", &ForceIp { ipv4: true, ipv6: false }).unwrap().is_ipv4());
+        #[cfg(not(target_os = "linux"))]
         assert!(lookup_host("localhost", &ForceIp { ipv4: false, ipv6: true }).is_some());
+        #[cfg(not(target_os = "linux"))]
         assert!(lookup_host("localhost", &ForceIp { ipv4: false, ipv6: true }).unwrap().is_ipv6());
     }
 

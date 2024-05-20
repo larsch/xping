@@ -1,7 +1,11 @@
 mod cmsghdr;
 mod icmp_socket;
 
+#[cfg(feature = "iphelper")]
 pub mod iphelper;
+
+#[cfg(feature = "iphelper")]
+pub use iphelper::IpHelperApi;
 
 pub use icmp_socket::IcmpSocketApi;
 use windows::Win32::Networking::WinSock;

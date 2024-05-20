@@ -1,5 +1,9 @@
 mod sockaddr;
 
+#[cfg(feature = "iphelper")]
+#[cfg(target_os = "windows")]
+pub use windows::IpHelperApi;
+
 #[cfg(target_os = "linux")]
 mod linux;
 
@@ -12,10 +16,10 @@ pub use linux::IcmpSocketApi;
 mod windows;
 
 #[cfg(target_os = "windows")]
-pub use windows::{iphelper::IpHelperApi, IcmpSocketApi};
+pub use windows::IcmpSocketApi;
 
 pub trait IcmpApi {
-    fn new(target: std::net::SocketAddr, length: usize) -> Result<Self, std::io::Error>
+    fn new() -> Result<Self, std::io::Error>
     where
         Self: Sized;
 
@@ -25,7 +29,7 @@ pub trait IcmpApi {
     /// Send an ICMP packet with the given sequence number and timestamp. The
     /// timestamp is inserted into the ICMP payload and can be used to calculate
     /// the round-trip time.
-    fn send(&mut self, sequence: u16, timestamp: u64) -> Result<(), std::io::Error>;
+    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16, timestamp: u64) -> Result<(), std::io::Error>;
 
     /// Wait for the next ICMP packet, error, or timeout. Returns the received
     /// packet or error. Doesn't return an Error on expected ICMP errors (such
@@ -336,7 +340,7 @@ fn construct_icmp_packet(packet: &mut [u8], icmp_type: u8, code: u8, id: u16, se
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     #[test]
     fn test_ping_pingprotocol() {
@@ -345,16 +349,17 @@ mod tests {
 
     #[test]
     #[cfg(windows)]
+    #[cfg(feature = "iphelper")]
     fn test_ping_icmpprotocol() {
         test_ping::<super::IpHelperApi>();
     }
 
     fn test_ping<T: IcmpApi>() {
-        let target = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
-        let mut pinger = T::new(target, 64).unwrap();
+        let target = IpAddr::V4(Ipv4Addr::LOCALHOST);
+        let mut pinger = T::new().unwrap();
         let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
-        pinger.send(sequence, timestamp).unwrap();
+        pinger.send(target, 64, sequence, timestamp).unwrap();
         let packet = pinger.recv(std::time::Duration::from_secs(1)).unwrap();
         // must always be a IcmpPacket
         assert!(matches!(packet, IcmpResult::IcmpPacket(_)));
@@ -373,7 +378,7 @@ mod tests {
             packet.message.seq, sequence,
             "Packet sequence must be the same as the sent sequence"
         );
-        assert_eq!(packet.addr, target, "Packet source address must be the target address");
+        assert_eq!(packet.addr.ip(), target, "Packet source address must be the target address");
     }
 
     #[test]
@@ -383,16 +388,17 @@ mod tests {
 
     #[test]
     #[cfg(windows)]
+    #[cfg(feature = "iphelper")]
     fn test_ping_ipv6_iphelper() {
         test_ping_ipv6::<super::IpHelperApi>();
     }
 
     fn test_ping_ipv6<T: IcmpApi>() {
-        let target = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), 0);
-        let mut pinger = T::new(target, 64).unwrap();
+        let target = IpAddr::V6(Ipv6Addr::LOCALHOST);
+        let mut pinger = T::new().unwrap();
         let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
-        pinger.send(sequence, timestamp).unwrap();
+        pinger.send(target, 64, sequence, timestamp).unwrap();
         let packet = pinger.recv(std::time::Duration::from_secs(1)).unwrap();
         // must always be a IcmpPacket
         assert!(matches!(packet, IcmpResult::IcmpPacket(_)));
@@ -414,7 +420,7 @@ mod tests {
             packet.message.seq, sequence,
             "Packet sequence must be the same as the sent sequence"
         );
-        assert_eq!(packet.addr, target, "Packet source address must be the target address");
+        assert_eq!(packet.addr.ip(), target, "Packet source address must be the target address");
     }
 
     #[test]
@@ -424,6 +430,7 @@ mod tests {
 
     #[test]
     #[cfg(windows)]
+    #[cfg(feature = "iphelper")]
     fn ping_google_ipv4_recvttl_icmpprotocol() -> Result<(), Box<dyn std::error::Error>> {
         ping_google_ipv4_recvttl::<super::IpHelperApi>()
     }
@@ -431,11 +438,10 @@ mod tests {
     fn ping_google_ipv4_recvttl<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
         let addrs = dns_lookup::lookup_host("google.com")?;
         let addr = addrs.iter().find(|addr| addr.is_ipv4()).unwrap();
-        let target = SocketAddr::new(*addr, 0);
-        let mut pinger = T::new(target, 64)?;
+        let mut pinger = T::new()?;
         let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
-        pinger.send(sequence, timestamp)?;
+        pinger.send(*addr, 64, sequence, timestamp)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
         assert!(matches!(packet, IcmpResult::IcmpPacket(_)));
         let packet = match packet {
@@ -455,11 +461,11 @@ mod tests {
     fn ping_google_ipv6_recvttl<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
         let addrs = dns_lookup::lookup_host("google.com")?;
         let addr = addrs.iter().find(|addr| addr.is_ipv6()).unwrap();
-        let target = SocketAddr::new(*addr, 0);
-        let mut pinger = T::new(target, 64)?;
+        let target = *addr;
+        let mut pinger = T::new()?;
         let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
-        pinger.send(sequence, timestamp)?;
+        pinger.send(target, 64, sequence, timestamp)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
         assert!(matches!(packet, IcmpResult::IcmpPacket(_)));
         let packet = match packet {
@@ -479,6 +485,7 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
+    #[cfg(feature = "iphelper")]
     fn test_ttl_ipv4_icmpprotocol() -> Result<(), Box<dyn std::error::Error>> {
         test_ttl_ipv4::<super::IpHelperApi>()
     }
@@ -486,12 +493,11 @@ mod tests {
     fn test_ttl_ipv4<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
         let addrs = dns_lookup::lookup_host("google.com")?;
         let addr = addrs.iter().find(|addr| addr.is_ipv4()).unwrap();
-        let target = SocketAddr::new(*addr, 0);
-        let mut pinger = T::new(target, 64)?;
+        let mut pinger = T::new()?;
         let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
         pinger.set_ttl(4)?;
-        pinger.send(sequence, timestamp)?;
+        pinger.send(*addr, 64, sequence, timestamp)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
         assert!(matches!(packet, IcmpResult::RecvError(_)));
         let err = match packet {
@@ -505,8 +511,9 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
+    #[cfg(target_os = "windows")]
+    #[cfg(feature = "iphelper")]
     fn test_ttl_ipv6_icmpprotocol() -> Result<(), Box<dyn std::error::Error>> {
         test_ttl_ipv6::<super::IpHelperApi>()
     }
@@ -520,12 +527,11 @@ mod tests {
     fn test_ttl_ipv6<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
         let addrs = dns_lookup::lookup_host("google.com")?;
         let addr = addrs.iter().find(|addr| addr.is_ipv6()).unwrap();
-        let target = SocketAddr::new(*addr, 0);
-        let mut pinger = T::new(target, 64)?;
+        let mut pinger = T::new()?;
         let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
         pinger.set_ttl(4)?;
-        pinger.send(sequence, timestamp)?;
+        pinger.send(*addr, 64, sequence, timestamp)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
         assert!(matches!(packet, IcmpResult::RecvError(_)));
         let err = match packet {
@@ -539,6 +545,29 @@ mod tests {
         assert_eq!(err.icmp_code, Some(0));
         assert!(err.offender.is_some());
         assert!(err.offender.unwrap().is_ipv6());
+        Ok(())
+    }
+
+    #[test]
+    fn test_ping_multiple_pingprotocol() -> Result<(), Box<dyn std::error::Error>> {
+        test_ping_multiple::<super::IcmpSocketApi>()
+    }
+
+    fn test_ping_multiple<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
+        let addrs = dns_lookup::lookup_host("google.com")?;
+        let addr = addrs.iter().find(|addr| addr.is_ipv4()).unwrap();
+        let mut pinger = T::new()?;
+        let timestamp = 0x4321fedcu64;
+        let sequence = 0xde42u16;
+        pinger.send(*addr, 64, sequence, timestamp)?;
+        let packet = pinger.recv(std::time::Duration::from_secs(1))?;
+        assert!(matches!(packet, IcmpResult::IcmpPacket(_)));
+        let packet = match packet {
+            IcmpResult::IcmpPacket(packet) => packet,
+            _ => unreachable!(),
+        };
+        assert!(packet.recvttl.is_some());
+        assert!(packet.recvttl.unwrap() <= 255);
         Ok(())
     }
 }

@@ -1,20 +1,26 @@
 use super::FromIpv4Addr;
 use std::net::{Ipv6Addr, SocketAddrV4, SocketAddrV6};
 use windows::Win32::{
-    Foundation::{CloseHandle, ERROR_IO_PENDING, HANDLE, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
+    Foundation::{CloseHandle, ERROR_IO_PENDING, HANDLE, WAIT_EVENT, WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
     NetworkManagement::IpHelper::{self, ICMP_ECHO_REPLY32},
     Networking::WinSock,
 };
 
 use crate::ping::{sockaddr::SockAddr, IcmpMessage};
 
-pub struct IpHelperApi {
+struct IpHelperHandle {
     icmp_handle: HANDLE,
-    target: std::net::SocketAddr,
+    // target: std::net::SocketAddr,
     event_handles: Vec<HANDLE>,
     packets: Vec<PacketInfo>,
     ttl: u8,
     send_buffer: Vec<u8>,
+}
+
+pub struct IpHelperApi {
+    handle4: Option<IpHelperHandle>,
+    handle6: Option<IpHelperHandle>,
+    ttl: u8,
 }
 
 struct PacketInfo {
@@ -25,41 +31,43 @@ struct PacketInfo {
     reply_buffer: Vec<u8>,
     /// Timestamp from request.
     timestamp: u64,
+    /// Target IP
+    target: std::net::IpAddr,
 }
 
 struct Ipv6AddressEx(IpHelper::IPV6_ADDRESS_EX);
 
 impl From<Ipv6AddressEx> for SocketAddrV6 {
     fn from(addr: Ipv6AddressEx) -> Self {
-        let ip = addr.0.sin6_addr;
-        let port = addr.0.sin6_port;
-        let ip = Ipv6Addr::from(ip);
-        SocketAddrV6::new(ip, port, addr.0.sin6_flowinfo, addr.0.sin6_scope_id)
+        let words = addr.0.sin6_addr;
+        let port = u16::from_be(addr.0.sin6_port);
+        let flowinfo = addr.0.sin6_flowinfo;
+        let scope_id = addr.0.sin6_scope_id;
+        SocketAddrV6::new(
+            Ipv6Addr::new(
+                u16::from_be(words[0]),
+                u16::from_be(words[1]),
+                u16::from_be(words[2]),
+                u16::from_be(words[3]),
+                u16::from_be(words[4]),
+                u16::from_be(words[5]),
+                u16::from_be(words[6]),
+                u16::from_be(words[7]),
+            ),
+            port,
+            flowinfo,
+            scope_id,
+        )
     }
 }
 
-impl crate::ping::IcmpApi for IpHelperApi {
-    fn new(target: std::net::SocketAddr, length: usize) -> Result<Self, std::io::Error> {
-        let icmp_handle = match target {
-            std::net::SocketAddr::V4(_) => unsafe { IpHelper::IcmpCreateFile() }?,
-            std::net::SocketAddr::V6(_) => unsafe { IpHelper::Icmp6CreateFile() }?,
-        };
-        Ok(Self {
-            icmp_handle,
-            target,
-            event_handles: Vec::new(),
-            packets: Vec::new(),
-            ttl: 64,
-            send_buffer: vec![0; length],
-        })
-    }
-
+impl IpHelperHandle {
     fn set_ttl(&mut self, ttl: u8) -> Result<(), std::io::Error> {
         self.ttl = ttl;
         Ok(())
     }
 
-    fn send(&mut self, sequence: u16, timestamp: u64) -> Result<(), std::io::Error> {
+    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16, timestamp: u64) -> Result<(), std::io::Error> {
         let event_handle = unsafe { windows::Win32::System::Threading::CreateEventW(None, true, false, None) }?;
 
         let ip_options = IpHelper::IP_OPTION_INFORMATION32 {
@@ -70,20 +78,20 @@ impl crate::ping::IcmpApi for IpHelperApi {
             OptionsData: std::ptr::null_mut(),
         };
 
-        let (send_result, packet_info) = match self.target {
-            std::net::SocketAddr::V4(addr) => {
+        let (send_result, packet_info) = match target {
+            std::net::IpAddr::V4(addr) => {
                 let sourceaddress: u32 = 0;
-                let destinationaddress = WinSock::IN_ADDR::from_ipv4addr(addr.ip());
+                let destinationaddress = WinSock::IN_ADDR::from_ipv4addr(&addr);
                 let destinationaddress = unsafe { destinationaddress.S_un.S_addr };
 
+                self.send_buffer.resize(length, 0);
                 super::super::construct_icmp_payload(self.send_buffer.as_mut(), timestamp);
-
-                let requestsize = self.send_buffer.len() as u16;
 
                 let mut packet_info = PacketInfo {
                     seq: sequence,
                     reply_buffer: vec![0; 2048],
                     timestamp,
+                    target,
                 };
 
                 (
@@ -96,7 +104,7 @@ impl crate::ping::IcmpApi for IpHelperApi {
                             sourceaddress,
                             destinationaddress,
                             self.send_buffer.as_ptr() as *const _,
-                            requestsize,
+                            self.send_buffer.len() as u16,
                             Some(&ip_options as *const _ as *const _),
                             packet_info.reply_buffer.as_mut_ptr() as *mut _,
                             packet_info.reply_buffer.len() as u32,
@@ -106,18 +114,22 @@ impl crate::ping::IcmpApi for IpHelperApi {
                     packet_info,
                 )
             }
-            std::net::SocketAddr::V6(_) => unsafe {
+            std::net::IpAddr::V6(ipv6addr) => unsafe {
                 let sourceaddress = SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0);
                 let sourceaddress: SockAddr = sourceaddress.into();
 
                 // let sourceaddress = null_mut();
-                let sockaddr = SockAddr::from(self.target);
+                let sockaddr = SockAddr::from(SocketAddrV6::new(ipv6addr, 0, 0, 0));
                 let destinationaddress = &sockaddr.sin6 as *const _;
+
+                self.send_buffer.resize(length, 0);
+                super::super::construct_icmp_payload(self.send_buffer.as_mut(), timestamp);
 
                 let mut packet_info = PacketInfo {
                     seq: sequence,
                     reply_buffer: vec![0; 2048],
                     timestamp,
+                    target,
                 };
 
                 (
@@ -155,113 +167,93 @@ impl crate::ping::IcmpApi for IpHelperApi {
         }
     }
 
-    fn recv(&mut self, timeout: std::time::Duration) -> Result<crate::ping::IcmpResult, std::io::Error> {
-        if self.event_handles.is_empty() {
-            std::thread::sleep(timeout);
-            return Ok(crate::ping::IcmpResult::Timeout);
-        }
+    fn complete_recv(&mut self, index: usize) -> Result<crate::ping::IcmpResult, std::io::Error> {
+        let event_handle = self.event_handles.remove(index);
+        unsafe { CloseHandle(event_handle)? };
 
-        let wait_result = unsafe {
-            windows::Win32::System::Threading::WaitForMultipleObjects(self.event_handles.as_slice(), false, timeout.as_millis() as u32)
-        };
+        let mut packet_info = self.packets.remove(index);
 
-        if wait_result == WAIT_TIMEOUT {
-            Ok(crate::ping::IcmpResult::Timeout)
-        } else if wait_result == WAIT_FAILED {
-            Err(std::io::Error::last_os_error())
-        } else if (wait_result.0 as usize) < (WAIT_OBJECT_0.0 as usize) + self.event_handles.len() {
-            let event_index = wait_result.0 as usize - WAIT_OBJECT_0.0 as usize;
+        match packet_info.target {
+            std::net::IpAddr::V4(_) => {
+                match unsafe {
+                    IpHelper::IcmpParseReplies(
+                        packet_info.reply_buffer.as_mut_ptr() as *mut _,
+                        packet_info.reply_buffer.len() as u32,
+                    )
+                } {
+                    0 => Err(std::io::Error::last_os_error()),
+                    1 => {
+                        let echo_reply: &ICMP_ECHO_REPLY32 = &unsafe { *(packet_info.reply_buffer.as_ptr() as *const ICMP_ECHO_REPLY32) };
+                        let _packet = unsafe { std::slice::from_raw_parts(echo_reply.Data as *const u8, echo_reply.DataSize as usize) };
+                        if echo_reply.Status == IpHelper::IP_SUCCESS {
+                            Ok(crate::ping::IcmpResult::IcmpPacket(crate::ping::IcmpPacket {
+                                addr: std::net::SocketAddr::V4(SocketAddrV4::new(u32::from_be(echo_reply.Address).into(), 0)),
+                                message: icmp_messager_from_icmp_echo_reply32(echo_reply, &packet_info),
+                                time: std::time::Instant::now(),
+                                recvttl: Some(echo_reply.Options.Ttl as u32),
+                            }))
+                        } else {
+                            let (icmp_type, icmp_code) = map_status(echo_reply.Status);
+                            Ok(crate::ping::IcmpResult::RecvError(crate::ping::RecvError {
+                                error: None,
+                                addr: Some(std::net::SocketAddr::V4(SocketAddrV4::new(echo_reply.Address.into(), 0))),
+                                original_message: None, // FIXME
+                                offender: Some(std::net::SocketAddr::V4(SocketAddrV4::new(echo_reply.Address.into(), 0))),
+                                icmp_type,                       // FIXME
+                                icmp_code,                       // FIXME
+                                time: std::time::Instant::now(), // FIXME
+                            }))
+                        }
+                    }
+                    _ => unreachable!(),
+                }
+            }
+            std::net::IpAddr::V6(_) => {
+                let parse_result = unsafe {
+                    IpHelper::Icmp6ParseReplies(
+                        packet_info.reply_buffer.as_mut_ptr() as *mut _,
+                        packet_info.reply_buffer.len() as u32,
+                    )
+                };
+                match parse_result {
+                    0 => Err(std::io::Error::last_os_error()),
+                    1 => {
+                        let echo_reply: &IpHelper::ICMPV6_ECHO_REPLY_LH =
+                            &unsafe { *(packet_info.reply_buffer.as_ptr() as *const IpHelper::ICMPV6_ECHO_REPLY_LH) };
 
-            let event_handle = self.event_handles.remove(event_index);
-            unsafe { CloseHandle(event_handle)? };
-
-            let mut packet_info = self.packets.remove(event_index);
-
-            match self.target {
-                std::net::SocketAddr::V4(_) => {
-                    match unsafe {
-                        IpHelper::IcmpParseReplies(
-                            packet_info.reply_buffer.as_mut_ptr() as *mut _,
-                            packet_info.reply_buffer.len() as u32,
-                        )
-                    } {
-                        0 => return Err(std::io::Error::last_os_error()),
-                        1 => {
-                            let echo_reply: &ICMP_ECHO_REPLY32 =
-                                &unsafe { *(packet_info.reply_buffer.as_ptr() as *const ICMP_ECHO_REPLY32) };
-                            let _packet = unsafe { std::slice::from_raw_parts(echo_reply.Data as *const u8, echo_reply.DataSize as usize) };
-                            if echo_reply.Status == IpHelper::IP_SUCCESS {
-                                Ok(crate::ping::IcmpResult::IcmpPacket(crate::ping::IcmpPacket {
-                                    addr: self.target,
-                                    message: icmp_messager_from_icmp_echo_reply32(echo_reply, &packet_info),
-                                    time: std::time::Instant::now(),
-                                    recvttl: Some(echo_reply.Options.Ttl as u32),
-                                }))
-                            } else {
+                        match echo_reply.Status {
+                            IpHelper::IP_SUCCESS => Ok(crate::ping::IcmpResult::IcmpPacket(crate::ping::IcmpPacket {
+                                addr: std::net::SocketAddr::V6(SocketAddrV6::from(Ipv6AddressEx(echo_reply.Address))),
+                                message: crate::ping::IcmpMessage {
+                                    icmp_type: crate::ping::IcmpType::EchoReply(packet_info.timestamp),
+                                    id: 0,
+                                    seq: packet_info.seq,
+                                    timestamp: Some(packet_info.timestamp),
+                                },
+                                time: std::time::Instant::now(),
+                                recvttl: None, // Unavailable
+                            })),
+                            _ => {
                                 let (icmp_type, icmp_code) = map_status(echo_reply.Status);
+                                println!(
+                                    "{:?}",
+                                    Some(std::net::SocketAddr::V6(SocketAddrV6::from(Ipv6AddressEx(echo_reply.Address))))
+                                );
                                 Ok(crate::ping::IcmpResult::RecvError(crate::ping::RecvError {
                                     error: None,
-                                    addr: Some(std::net::SocketAddr::V4(SocketAddrV4::new(echo_reply.Address.into(), 0))),
+                                    addr: Some(std::net::SocketAddr::V6(SocketAddrV6::from(Ipv6AddressEx(echo_reply.Address)))),
                                     original_message: None, // FIXME
-                                    offender: Some(std::net::SocketAddr::V4(SocketAddrV4::new(echo_reply.Address.into(), 0))),
+                                    offender: Some(std::net::SocketAddr::V6(SocketAddrV6::from(Ipv6AddressEx(echo_reply.Address)))),
                                     icmp_type,                       // FIXME
                                     icmp_code,                       // FIXME
                                     time: std::time::Instant::now(), // FIXME
                                 }))
                             }
                         }
-                        _ => unreachable!(),
                     }
-                }
-                std::net::SocketAddr::V6(_) => {
-                    let parse_result = unsafe {
-                        IpHelper::Icmp6ParseReplies(
-                            packet_info.reply_buffer.as_mut_ptr() as *mut _,
-                            packet_info.reply_buffer.len() as u32,
-                        )
-                    };
-                    match parse_result {
-                        0 => Err(std::io::Error::last_os_error()),
-                        1 => {
-                            let echo_reply: &IpHelper::ICMPV6_ECHO_REPLY_LH =
-                                &unsafe { *(packet_info.reply_buffer.as_ptr() as *const IpHelper::ICMPV6_ECHO_REPLY_LH) };
-
-                            match echo_reply.Status {
-                                IpHelper::IP_SUCCESS => Ok(crate::ping::IcmpResult::IcmpPacket(crate::ping::IcmpPacket {
-                                    addr: self.target,
-                                    message: crate::ping::IcmpMessage {
-                                        icmp_type: crate::ping::IcmpType::EchoReply(packet_info.timestamp),
-                                        id: 0,
-                                        seq: packet_info.seq,
-                                        timestamp: Some(packet_info.timestamp),
-                                    },
-                                    time: std::time::Instant::now(),
-                                    recvttl: None, // Unavailable
-                                })),
-                                _ => {
-                                    let (icmp_type, icmp_code) = map_status(echo_reply.Status);
-                                    println!(
-                                        "{:?}",
-                                        Some(std::net::SocketAddr::V6(SocketAddrV6::from(Ipv6AddressEx(echo_reply.Address))))
-                                    );
-                                    Ok(crate::ping::IcmpResult::RecvError(crate::ping::RecvError {
-                                        error: None,
-                                        addr: Some(std::net::SocketAddr::V6(SocketAddrV6::from(Ipv6AddressEx(echo_reply.Address)))),
-                                        original_message: None, // FIXME
-                                        offender: Some(std::net::SocketAddr::V6(SocketAddrV6::from(Ipv6AddressEx(echo_reply.Address)))),
-                                        icmp_type,                       // FIXME
-                                        icmp_code,                       // FIXME
-                                        time: std::time::Instant::now(), // FIXME
-                                    }))
-                                }
-                            }
-                        }
-                        _ => unreachable!(),
-                    }
+                    _ => unreachable!(),
                 }
             }
-        } else {
-            unimplemented!("WaitForMultipleObjects returned {:?}", wait_result);
         }
     }
 }
@@ -309,5 +301,141 @@ fn icmp_messager_from_icmp_echo_reply32(echo_reply: &ICMP_ECHO_REPLY32, packet_i
         id: 0,
         seq: packet_info.seq,
         timestamp: Some(u64::from_be_bytes(data[0..8].try_into().unwrap())),
+    }
+}
+
+impl crate::ping::IcmpApi for IpHelperApi {
+    fn new() -> Result<Self, std::io::Error>
+    where
+        Self: Sized,
+    {
+        Ok(IpHelperApi {
+            handle4: None,
+            handle6: None,
+            ttl: 64,
+        })
+    }
+
+    fn set_ttl(&mut self, ttl: u8) -> Result<(), std::io::Error> {
+        if let Some(handle4) = &mut self.handle4 {
+            handle4.set_ttl(ttl)?;
+        }
+        if let Some(handle6) = &mut self.handle6 {
+            handle6.set_ttl(ttl)?;
+        }
+        self.ttl = ttl;
+        Ok(())
+    }
+
+    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16, timestamp: u64) -> Result<(), std::io::Error> {
+        match target {
+            std::net::IpAddr::V4(_) => self.ipv4_handle()?.send(target, length, sequence, timestamp),
+            std::net::IpAddr::V6(_) => self.ipv6_handle()?.send(target, length, sequence, timestamp),
+        }
+    }
+
+    fn recv(&mut self, timeout: std::time::Duration) -> Result<crate::ping::IcmpResult, std::io::Error> {
+        let ipv4_handle_count = self.handle4.as_ref().map(|handle| handle.event_handles.len()).unwrap_or(0);
+        let all_event_handles = self
+            .handle4
+            .as_ref()
+            .map(|handle| handle.event_handles.as_slice())
+            .unwrap_or(&[])
+            .iter()
+            .chain(
+                self.handle6
+                    .as_ref()
+                    .map(|handle| handle.event_handles.as_slice())
+                    .unwrap_or(&[])
+                    .iter(),
+            )
+            .copied()
+            .collect::<Vec<_>>();
+
+        if all_event_handles.is_empty() {
+            std::thread::sleep(timeout);
+            return Ok(crate::ping::IcmpResult::Timeout);
+        }
+
+        let wait_result = unsafe {
+            windows::Win32::System::Threading::WaitForMultipleObjects(all_event_handles.as_slice(), false, timeout.as_millis() as u32)
+        };
+
+        match wait_result {
+            WAIT_TIMEOUT => Ok(crate::ping::IcmpResult::Timeout),
+            WAIT_FAILED => Err(std::io::Error::last_os_error()),
+            WAIT_EVENT(n) => {
+                let index = (n - WAIT_OBJECT_0.0) as usize;
+                if index < ipv4_handle_count {
+                    self.handle4.as_mut().unwrap().complete_recv(index)
+                } else {
+                    self.handle6.as_mut().unwrap().complete_recv(index - ipv4_handle_count)
+                }
+            }
+        }
+    }
+}
+
+impl IpHelperApi {
+    fn ipv4_handle(&mut self) -> Result<&mut IpHelperHandle, std::io::Error> {
+        if self.handle4.is_none() {
+            let icmp_handle = unsafe { IpHelper::IcmpCreateFile() }?;
+            self.handle4 = Some(IpHelperHandle {
+                icmp_handle,
+                event_handles: Vec::new(),
+                packets: Vec::new(),
+                ttl: self.ttl,
+                send_buffer: Vec::new(),
+            });
+        }
+        Ok(self.handle4.as_mut().unwrap())
+    }
+
+    fn ipv6_handle(&mut self) -> Result<&mut IpHelperHandle, std::io::Error> {
+        if self.handle6.is_none() {
+            let icmp_handle = unsafe { IpHelper::Icmp6CreateFile() }?;
+            self.handle6 = Some(IpHelperHandle {
+                icmp_handle,
+                event_handles: Vec::new(),
+                packets: Vec::new(),
+                ttl: self.ttl,
+                send_buffer: Vec::new(),
+            });
+        }
+        Ok(self.handle6.as_mut().unwrap())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_ipv6_address_conversion() {
+        let addr = Ipv6AddressEx(IpHelper::IPV6_ADDRESS_EX {
+            sin6_addr: [
+                0x2001u16.to_be(),
+                0x0db8u16.to_be(),
+                0x85a3u16.to_be(),
+                0x0000u16.to_be(),
+                0x0000u16.to_be(),
+                0x8a2eu16.to_be(),
+                0x0370u16.to_be(),
+                0x7334u16.to_be(),
+            ],
+            sin6_port: 0x1234u16.to_be(),
+            sin6_flowinfo: 0x5678,
+            sin6_scope_id: 0x9abc,
+        });
+        let socket_addr: SocketAddrV6 = addr.into();
+        assert_eq!(
+            socket_addr,
+            SocketAddrV6::new(
+                Ipv6Addr::new(0x2001, 0x0db8, 0x85a3, 0x0000, 0x0000, 0x8a2e, 0x0370, 0x7334),
+                0x1234,
+                0x5678,
+                0x9abc
+            )
+        );
     }
 }

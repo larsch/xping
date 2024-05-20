@@ -24,3 +24,7 @@ features = [
     "Win32_System_Threading",
     "Win32_Security",
 ]
+
+[features]
+default = ["iphelper"]
+iphelper = []
