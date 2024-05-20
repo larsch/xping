@@ -25,6 +25,7 @@ pub struct IcmpSocketApi {
     length: usize,
     wsarecvmsg: WinSock::LPFN_WSARECVMSG,
     control_buffer: [u8; 512],
+    wsamsg: WinSock::WSAMSG,
 }
 
 impl Drop for IcmpSocketApi {
@@ -78,7 +79,6 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
                 None,
             )
         };
-        // convert recvmsg_function_pointer to WinSock::LPFN_WSARECVMSG
 
         if result == WinSock::SOCKET_ERROR {
             return Err(std::io::Error::last_os_error());
@@ -97,6 +97,7 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
             length,
             wsarecvmsg: recvmsg_function_pointer,
             control_buffer: [0u8; 512],
+            wsamsg: Default::default(),
         };
 
         let enabled: u32 = 1;
@@ -127,11 +128,7 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
         let id = sequence;
         self.send_packet.resize(8 + self.length, 0u8);
         crate::ping::construct_icmp_packet(&mut self.send_packet, icmp_type, code, id, sequence, timestamp);
-        // let mut packet16 = [0u16; self.length];
-        // let packet: &mut [u8; 32] = unsafe { std::mem::transmute(&mut packet16) };
         let packet = &mut self.send_packet;
-
-        // packet[self.length - 1] ^= 0xffu8;
 
         // Create PSTR/WSABUF for icmp packet
         let packet_pstr = PSTR::from_raw(packet.as_mut_ptr());
@@ -170,6 +167,7 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
             len: self.recv_buffer.len() as u32,
             buf: PSTR::from_raw(self.recv_buffer.as_mut_ptr()),
         }];
+
         let mut bytes_received = 0u32;
 
         // let mut recv_sockaddr = WinSock::SOCKADDR::default();
@@ -178,25 +176,29 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
         let mut flags = 0u32;
 
         if self.recv_overlapped.hEvent == HANDLE::default() {
-            // Overlapped operation not started yet
-
             self.recv_overlapped.hEvent = unsafe { WinSock::WSACreateEvent() }.unwrap();
-
-            let result = if self.wsarecvmsg.is_some() {
-                let mut msg = WinSock::WSAMSG {
-                    name: self.recv_from.as_mut(),
-                    namelen: self.recv_fromlen,
-                    lpBuffers: recv_wsabuf.as_mut_ptr(),
-                    dwBufferCount: 1,
-                    Control: WinSock::WSABUF {
-                        len: self.control_buffer.len() as u32,
-                        buf: PSTR::from_raw(self.control_buffer.as_mut_ptr()),
-                    },
-                    dwFlags: 0,
-                };
-                unsafe { (self.wsarecvmsg.unwrap())(self.socket, &mut msg, &mut bytes_received, &mut self.recv_overlapped, None) }
-            } else {
-                unsafe {
+            let result = match self.wsarecvmsg {
+                Some(wsarecvmsg_fn) => {
+                    // According to the documentation, the WSARecvMsg is
+                    // required to copy the WSAMSG structure before returning.
+                    // However, this _appears_ to result in a crash (access
+                    // violation or stack overflow). This goes away if we keep
+                    // the WSAMSG structure on the heap.
+                    // https://learn.microsoft.com/en-us/previous-versions/windows/desktop/legacy/ms741687(v=vs.85)
+                    self.wsamsg = WinSock::WSAMSG {
+                        name: self.recv_from.as_mut(),
+                        namelen: self.recv_fromlen,
+                        lpBuffers: recv_wsabuf.as_mut_ptr(),
+                        dwBufferCount: 1,
+                        Control: WinSock::WSABUF {
+                            len: self.control_buffer.len() as u32,
+                            buf: PSTR::from_raw(self.control_buffer.as_mut_ptr()),
+                        },
+                        dwFlags: 0,
+                    };
+                    unsafe { wsarecvmsg_fn(self.socket, &mut self.wsamsg, &mut bytes_received, &mut self.recv_overlapped, None) }
+                }
+                None => unsafe {
                     WinSock::WSARecvFrom(
                         self.socket,
                         &recv_wsabuf,
@@ -207,7 +209,7 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
                         Some(&mut self.recv_overlapped as *mut OVERLAPPED),
                         None,
                     )
-                }
+                },
             };
 
             match result {
@@ -232,7 +234,7 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
 
         let timeout = timeout.as_millis() as u32;
 
-        // An overlapped operation has now been started
+        // Wait for overlapped operation to complete
         let rc = unsafe { WinSock::WSAWaitForMultipleEvents(&[self.recv_overlapped.hEvent], true, timeout, true) };
 
         match rc.0 {
@@ -321,10 +323,7 @@ impl IcmpSocketApi {
                         );
                         ttl = Some(unsafe { *(cmsg_data(cmsg) as *const u32) });
                     }
-                    _ => {
-                        #[cfg(debug_assertions)]
-                        panic!("Unknown cmsg_type: {:x}", cmsg_type);
-                    }
+                    _ => unreachable!("Unexpected cmsg_type: {}", cmsg_type),
                 }
 
                 cmsg = cmsg_nxthdr(&msg, cmsg);
