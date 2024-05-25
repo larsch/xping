@@ -2,6 +2,18 @@
 name = "ping"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+default-run = "mping"
+description = "Command line ping, re-imagined."
+authors = ["Lars Christensen <larsch@belunktum.dk>"]
+exclude = ["target/release/update-readme.exe"]
+homepage = "https://github.com/larsch/mping"
+repository = "https://github.com/larsch/mping"
+publish = false
+
+[[bin]]
+name = "mping"
+path = "src/main.rs"
 
 [dependencies]
 clap = { version = "4.5.4", features = ["derive"] }

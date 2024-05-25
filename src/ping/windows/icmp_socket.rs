@@ -191,7 +191,6 @@ impl IcmpSocket {
             match result {
                 0 => {
                     // The operation completed immediately
-                    println!("WSARecvFrom completed immediately");
                     unsafe { WinSock::WSACloseEvent(self.overlapped.hEvent) }.unwrap();
                     self.overlapped.hEvent = HANDLE::default();
                     Ok(Some(self.complete_recv(self.recvfrom.try_into().unwrap(), bytes_received)?))

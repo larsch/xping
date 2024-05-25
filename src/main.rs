@@ -1,6 +1,9 @@
+mod args;
 mod display;
 mod ping;
+
 use clap::Parser;
+
 use std::{
     collections::VecDeque,
     net::{IpAddr, SocketAddr, SocketAddrV4, SocketAddrV6},
@@ -11,73 +14,10 @@ use crate::display::DisplayModeTrait;
 
 use crate::ping::IcmpApi;
 
-#[derive(clap::ValueEnum, Clone, Debug, Default)]
-enum Api {
-    /// Use ICMP datagram sockets
-    #[default]
-    IcmpSocket,
-    /// Use Windows IP Helper API
-    #[cfg(windows)]
-    #[cfg(feature = "iphelper")]
-    Iphelper,
-}
+#[cfg(debug_assertions)]
+mod update_readme;
 
-#[derive(Parser, Debug)]
-#[command(version, about, long_about = None)]
-struct Args {
-    /// Number of packets per second
-    #[arg(short, long)]
-    rate: Option<u32>,
-
-    /// Packet interval in milliseconds
-    #[arg(short, long, default_value_t = 1000)]
-    interval: u64,
-
-    /// Number of attempts (default infinite)
-    #[arg(short, long)]
-    count: Option<u32>,
-
-    /// Timeout waiting for response in milliseconds
-    #[arg(short = 'w', long, default_value_t = 1000)]
-    timeout: u64,
-
-    /// Length of ICMP payload in bytes
-    #[arg(short, long, default_value_t = 64)]
-    length: usize,
-
-    /// Address or name of target host
-    #[arg()]
-    target: String,
-
-    /// Display mode
-    #[arg(short, long, default_value = "classic")]
-    display: display::DisplayMode,
-
-    /// Time to live
-    #[arg(short, long, default_value_t = 64)]
-    ttl: u8,
-
-    /// API to use
-    #[arg(short, long, default_value = "icmp-socket")]
-    api: Api,
-
-    #[command(flatten)]
-    force_ip: ForceIp,
-}
-
-#[derive(Parser, Debug)]
-#[group(multiple(false))]
-struct ForceIp {
-    /// Force IPv4
-    #[arg(short = '4', long)]
-    ipv4: bool,
-
-    /// Force IPv6
-    #[arg(short = '6', long)]
-    ipv6: bool,
-}
-
-fn lookup_host(host: &str, force_ip: &ForceIp) -> Option<IpAddr> {
+fn lookup_host(host: &str, force_ip: &args::ForceIp) -> Option<IpAddr> {
     let target = dns_lookup::lookup_host(host).ok()?;
     let target = if force_ip.ipv4 {
         target.iter().find(|ip| ip.is_ipv4())
@@ -96,7 +36,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })
     .expect("Error setting Ctrl-C handler");
 
-    let args = Args::parse();
+    let args = args::Args::parse();
+
+    #[cfg(debug_assertions)]
+    if args.update_readme {
+        update_readme::update_readme();
+        return Ok(());
+    }
 
     let target = lookup_host(&args.target, &args.force_ip);
 
@@ -124,10 +70,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut next_send = std::time::Instant::now();
     let mut ping_protocol: Box<dyn ping::IcmpApi> = match args.api {
-        Api::IcmpSocket => Box::new(ping::IcmpSocketApi::new()?),
+        args::Api::IcmpSocket => Box::new(ping::IcmpSocketApi::new()?),
         #[cfg(windows)]
         #[cfg(feature = "iphelper")]
-        Api::Iphelper => Box::new(ping::IpHelperApi::new()?),
+        args::Api::Iphelper => Box::new(ping::IpHelperApi::new()?),
     };
 
     ping_protocol.set_ttl(args.ttl).expect("Failed to set TTL");
@@ -152,12 +98,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut entries = VecDeque::new();
 
     let mut display_mode: Box<dyn display::DisplayModeTrait> = match args.display {
-        display::DisplayMode::Classic => Box::new(display::ClassicDisplayMode::new(columns, rows)),
-        display::DisplayMode::Char => Box::new(display::CharDisplayMode::new(columns, rows)),
-        display::DisplayMode::Dumb => Box::new(display::DumbDisplayMode::new(columns, rows)),
-        display::DisplayMode::CharGraph => Box::new(display::CharGraphDisplayMode::new(columns, rows)),
-        display::DisplayMode::Debug => Box::new(display::DebugDisplayMode::new(columns, rows)),
-        display::DisplayMode::None => Box::new(display::NoneDisplayMode::new(columns, rows)),
+        args::DisplayMode::Classic => Box::new(display::ClassicDisplayMode::new(columns, rows)),
+        args::DisplayMode::Char => Box::new(display::CharDisplayMode::new(columns, rows)),
+        args::DisplayMode::Dumb => Box::new(display::DumbDisplayMode::new(columns, rows)),
+        args::DisplayMode::CharGraph => Box::new(display::CharGraphDisplayMode::new(columns, rows)),
+        args::DisplayMode::Debug => Box::new(display::DebugDisplayMode::new(columns, rows)),
+        args::DisplayMode::None => Box::new(display::NoneDisplayMode::new(columns, rows)),
     };
 
     let icmp_timeout = std::time::Duration::from_millis(args.timeout);
@@ -292,17 +238,21 @@ mod tests {
 
     #[test]
     fn test_lookup_host() {
-        assert!(lookup_host("localhost", &ForceIp { ipv4: false, ipv6: false }).is_some());
-        assert!(lookup_host("localhost", &ForceIp { ipv4: true, ipv6: false }).is_some());
-        assert!(lookup_host("localhost", &ForceIp { ipv4: true, ipv6: false }).unwrap().is_ipv4());
+        assert!(lookup_host("localhost", &args::ForceIp { ipv4: false, ipv6: false }).is_some());
+        assert!(lookup_host("localhost", &args::ForceIp { ipv4: true, ipv6: false }).is_some());
+        assert!(lookup_host("localhost", &args::ForceIp { ipv4: true, ipv6: false })
+            .unwrap()
+            .is_ipv4());
         #[cfg(not(target_os = "linux"))]
-        assert!(lookup_host("localhost", &ForceIp { ipv4: false, ipv6: true }).is_some());
+        assert!(lookup_host("localhost", &args::ForceIp { ipv4: false, ipv6: true }).is_some());
         #[cfg(not(target_os = "linux"))]
-        assert!(lookup_host("localhost", &ForceIp { ipv4: false, ipv6: true }).unwrap().is_ipv6());
+        assert!(lookup_host("localhost", &args::ForceIp { ipv4: false, ipv6: true })
+            .unwrap()
+            .is_ipv6());
     }
 
     #[test]
     fn test_lookup_host_no_address() {
-        assert!(lookup_host("nonexistent", &ForceIp { ipv4: false, ipv6: false }).is_none());
+        assert!(lookup_host("nonexistent", &args::ForceIp { ipv4: false, ipv6: false }).is_none());
     }
 }
