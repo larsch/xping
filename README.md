@@ -1,5 +1,7 @@
 # mping
 
+[![Rust](https://github.com/larsch/mping/actions/workflows/rust.yml/badge.svg)](https://github.com/larsch/mping/actions/workflows/rust.yml)
+
 Command line ping re-imagined. Sends ICMP echo requests and measures round-trip
 time to target host, with bells and whistles.
 
