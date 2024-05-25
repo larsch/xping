@@ -4,23 +4,6 @@ use crossterm::QueueableCommand;
 
 use crate::ping::{IcmpPacket, RecvError};
 
-#[derive(clap::ValueEnum, Clone, Debug, Default)]
-pub enum DisplayMode {
-    #[default]
-    Classic,
-    Char,
-    Dumb,
-    CharGraph,
-    Debug,
-    None,
-}
-
-impl std::fmt::Display for DisplayMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
 pub trait DisplayModeTrait {
     fn new(columns: u16, rows: u16) -> Self
     where
