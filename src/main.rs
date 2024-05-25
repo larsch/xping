@@ -257,6 +257,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         total_time: start_time.elapsed(),
     };
 
+    display_mode.close()?;
+
     match args.summary {
         args::SummaryFormat::Text => print!("{}", summary.as_text()?),
         args::SummaryFormat::Json => println!("{}", serde_json::to_string(&summary)?),
@@ -264,7 +266,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         args::SummaryFormat::None => (),
     }
 
-    display_mode.close()?;
     Ok(())
 }
 
