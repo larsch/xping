@@ -1,6 +1,7 @@
 mod args;
 mod display;
 mod ping;
+mod summary;
 
 use clap::Parser;
 
@@ -108,11 +109,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let icmp_timeout = std::time::Duration::from_millis(args.timeout);
 
+    let mut packets_transmitted = 0;
+    let mut packets_received = 0;
+    let mut minimum_rtt: Option<Duration> = None;
+    let mut maximum_rtt: Option<Duration> = None;
+    let mut total_rtt = Duration::from_secs(0);
+    let mut total_rtt_counted = 0;
+    let start_time = Instant::now();
+
     while attempts_left > 0 || !entries.is_empty() {
         if attempts_left > 0 {
             let timestamp = time_reference.elapsed().as_nanos() as u64;
             let icmp_sequence = sequence as u16;
             ping_protocol.send(target_sa.ip(), args.length, icmp_sequence, timestamp).unwrap();
+            packets_transmitted += 1;
 
             display_mode.display_send(&target, args.length, sequence)?;
 
@@ -178,6 +188,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let response = ping_protocol.recv(time_left)?;
             match response {
                 ping::IcmpResult::IcmpPacket(packet) => {
+                    packets_received += 1;
+
                     if let Some(tx_timestamp) = packet.message.timestamp {
                         let rx_timestamp = (packet.time - time_reference).as_nanos() as u64;
 
@@ -186,6 +198,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         }
                         let nanos = rx_timestamp - tx_timestamp;
                         let round_trip_time = std::time::Duration::from_nanos(nanos);
+                        total_rtt += round_trip_time;
+                        total_rtt_counted += 1;
+                        minimum_rtt = Some(minimum_rtt.map_or(round_trip_time, |min| min.min(round_trip_time)));
+                        maximum_rtt = Some(maximum_rtt.map_or(round_trip_time, |max| max.max(round_trip_time)));
                         let front_sequence = entries.front().unwrap().sequence;
                         let position = (packet.message.seq as usize + 65536 - front_sequence as usize) % 65536;
                         if position <= entries.len() {
@@ -226,6 +242,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 break; // Break receive loop and send next request
             }
         }
+    }
+
+    let summary = summary::Summary {
+        packets_transmitted,
+        packets_received,
+        minimum_rtt,
+        maximum_rtt,
+        average_rtt: if total_rtt_counted > 0 {
+            Some(total_rtt / total_rtt_counted)
+        } else {
+            None
+        },
+        total_time: start_time.elapsed(),
+    };
+
+    match args.summary {
+        args::SummaryFormat::Text => print!("{}", summary.as_text()?),
+        args::SummaryFormat::Json => println!("{}", serde_json::to_string(&summary)?),
+        args::SummaryFormat::Csv => print!("{}", summary.as_csv()?),
+        args::SummaryFormat::None => (),
     }
 
     display_mode.close()?;

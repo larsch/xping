@@ -12,6 +12,15 @@ pub enum DisplayMode {
 }
 
 #[derive(clap::ValueEnum, Clone, Debug, Default)]
+pub enum SummaryFormat {
+    #[default]
+    Text,
+    Json,
+    Csv,
+    None,
+}
+
+#[derive(clap::ValueEnum, Clone, Debug, Default)]
 pub enum Api {
     /// Use ICMP datagram sockets
     #[default]
@@ -64,8 +73,11 @@ pub struct Args {
     #[command(flatten)]
     pub force_ip: ForceIp,
 
+    #[arg(long, default_value = "text")]
+    pub summary: SummaryFormat,
+
     #[cfg(debug_assertions)]
-    #[arg(long)]
+    #[arg(long, hide = true)]
     pub update_readme: bool,
 }
 

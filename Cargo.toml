@@ -23,6 +23,10 @@ dns-lookup = "2.0.4"
 hex = "0.4.3"
 int-enum = "1.1.1"
 libc = "0.2.153"
+serde = "1.0.202"
+serde_derive = "1.0.202"
+serde_json = { version = "1.0.117" }
+serde_with = "3.8.1"
 
 [target.'cfg(windows)'.dependencies.windows]
 version = "0.56.0"

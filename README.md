@@ -27,7 +27,7 @@ Options:
   -a, --api <API>            API to use [default: icmp-socket] [possible values: icmp-socket, iphelper]
   -4, --ipv4                 Force using IPv4
   -6, --ipv6                 Force using IPv6
-      --update-readme
+      --summary <SUMMARY>    [default: text] [possible values: text, json, csv, none]
   -h, --help                 Print help (see more with '--help')
   -V, --version              Print version
 
@@ -54,12 +54,12 @@ Options:
     - Windows: IP Helper API (`iphelper`, default) and raw ICMP sockets (`icmp-socket`)
     - Linux: ICMP sockets (`icmp-socket`)
 - IP_RECVERR support on Linux (for detailed error messages)
+- Packet loss statistics (like classic ping)
+- Show latency statistics (min, max, avg)
 
 ## Missing features & ideas
 
 - OS timestamping (SO_TIMESTAMP)
-- Packet loss statistics
 - Packet loss graph
 - Support more than 64 outstanding packets on Windows (currently limited by WaitForMultipleObjects)
-- Show latency statistics (min, max, avg)
 - Show receive TTL
