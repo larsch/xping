@@ -434,6 +434,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "skip-network-tests"))]
     fn ping_google_ipv4_recvttl_icmpsocket() -> Result<(), Box<dyn std::error::Error>> {
         ping_google_ipv4_recvttl::<super::IcmpSocketApi>()
     }
@@ -446,6 +447,7 @@ mod tests {
         ping_google_ipv4_recvttl::<super::IpHelperApi>()
     }
 
+    #[cfg(not(feature = "skip-network-tests"))]
     fn ping_google_ipv4_recvttl<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
         let _lock = TEST_MUTEX.lock().unwrap();
         let addrs = dns_lookup::lookup_host("google.com")?;
@@ -492,8 +494,9 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
+    #[cfg(target_os = "linux")]
+    #[cfg(not(feature = "skip-network-tests"))]
     fn test_ttl_ipv4_icmpsocket() -> Result<(), Box<dyn std::error::Error>> {
         test_ttl_ipv4::<super::IcmpSocketApi>()
     }
