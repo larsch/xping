@@ -574,6 +574,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "skip-network-tests"))]
     fn test_ping_multiple_icmpsocket() -> Result<(), Box<dyn std::error::Error>> {
         test_ping_multiple::<super::IcmpSocketApi>()
     }
