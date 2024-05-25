@@ -581,11 +581,13 @@ mod tests {
     #[test]
     #[cfg(windows)]
     #[cfg(feature = "iphelper")]
+    #[cfg(not(feature = "skip-network-tests"))]
     fn test_ping_multiple_iphelper() -> Result<(), Box<dyn std::error::Error>> {
         test_ping_multiple::<super::IpHelperApi>()
     }
 
     /// Test sending multiple ICMP packets to multiple addresses
+    #[cfg(not(feature = "skip-network-tests"))]
     fn test_ping_multiple<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
         let _lock = TEST_MUTEX.lock().unwrap();
         let addrs = dns_lookup::lookup_host("google.com")?;
