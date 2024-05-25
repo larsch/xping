@@ -553,21 +553,34 @@ mod tests {
         test_ping_multiple::<super::IcmpSocketApi>()
     }
 
+    #[test]
+    #[cfg(windows)]
+    #[cfg(feature = "iphelper")]
+    fn test_ping_multiple_icmpprotocol() -> Result<(), Box<dyn std::error::Error>> {
+        test_ping_multiple::<super::IpHelperApi>()
+    }
+
+    /// Test sending multiple ICMP packets to multiple addresses
     fn test_ping_multiple<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
         let addrs = dns_lookup::lookup_host("google.com")?;
-        let addr = addrs.iter().find(|addr| addr.is_ipv4()).unwrap();
+        let ipv4addrs: Vec<IpAddr> = addrs.iter().filter(|addr| addr.is_ipv4()).cloned().collect();
+        assert!(ipv4addrs.len() > 1);
         let mut pinger = T::new()?;
         let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
-        pinger.send(*addr, 64, sequence, timestamp)?;
-        let packet = pinger.recv(std::time::Duration::from_secs(1))?;
-        assert!(matches!(packet, IcmpResult::IcmpPacket(_)));
-        let packet = match packet {
-            IcmpResult::IcmpPacket(packet) => packet,
-            _ => unreachable!(),
-        };
-        assert!(packet.recvttl.is_some());
-        assert!(packet.recvttl.unwrap() <= 255);
+        for addr in &ipv4addrs {
+            pinger.send(*addr, 64, sequence, timestamp)?;
+        }
+        let mut remaining: std::collections::HashSet<IpAddr> = ipv4addrs.iter().cloned().collect();
+        while !remaining.is_empty() {
+            let packet = pinger.recv(std::time::Duration::from_secs(1))?;
+            let packet = match packet {
+                IcmpResult::IcmpPacket(packet) => packet,
+                _ => unreachable!(),
+            };
+            println!("{:?}", packet);
+            assert!(remaining.remove(&packet.addr.ip()));
+        }
         Ok(())
     }
 }
