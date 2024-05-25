@@ -60,6 +60,9 @@ Options:
 ## Missing features & ideas
 
 - OS timestamping (SO_TIMESTAMP)
-- Packet loss graph
+- Latency graph
 - Support more than 64 outstanding packets on Windows (currently limited by WaitForMultipleObjects)
 - Show receive TTL
+- Ping multiple targets
+- IPv4 route recording
+- IPv4 timestamp
