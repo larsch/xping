@@ -340,21 +340,30 @@ fn construct_icmp_packet(packet: &mut [u8], icmp_type: u8, code: u8, id: u16, se
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lazy_static::lazy_static;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use std::sync::Mutex;
+
+    lazy_static! {
+        /// A mutex to ensure that tests don't run concurrently
+        static ref TEST_MUTEX: Mutex<()> = Mutex::new(());
+    }
 
     #[test]
-    fn test_ping_pingprotocol() {
+    fn test_ping_icmpsocket() {
         test_ping::<super::IcmpSocketApi>();
     }
 
     #[test]
     #[cfg(windows)]
     #[cfg(feature = "iphelper")]
-    fn test_ping_icmpprotocol() {
+    fn test_ping_iphelper() {
         test_ping::<super::IpHelperApi>();
     }
 
     fn test_ping<T: IcmpApi>() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
         let target = IpAddr::V4(Ipv4Addr::LOCALHOST);
         let mut pinger = T::new().unwrap();
         let timestamp = 0x4321fedcu64;
@@ -382,7 +391,7 @@ mod tests {
     }
 
     #[test]
-    fn test_ping_ipv6_icmp_socket() {
+    fn test_ping_ipv6_icmpsocket() {
         test_ping_ipv6::<super::IcmpSocketApi>();
     }
 
@@ -394,6 +403,7 @@ mod tests {
     }
 
     fn test_ping_ipv6<T: IcmpApi>() {
+        let _lock = TEST_MUTEX.lock().unwrap();
         let target = IpAddr::V6(Ipv6Addr::LOCALHOST);
         let mut pinger = T::new().unwrap();
         let timestamp = 0x4321fedcu64;
@@ -424,18 +434,19 @@ mod tests {
     }
 
     #[test]
-    fn ping_google_ipv4_recvttl_pingprotocol() -> Result<(), Box<dyn std::error::Error>> {
+    fn ping_google_ipv4_recvttl_icmpsocket() -> Result<(), Box<dyn std::error::Error>> {
         ping_google_ipv4_recvttl::<super::IcmpSocketApi>()
     }
 
     #[test]
     #[cfg(windows)]
     #[cfg(feature = "iphelper")]
-    fn ping_google_ipv4_recvttl_icmpprotocol() -> Result<(), Box<dyn std::error::Error>> {
+    fn ping_google_ipv4_recvttl_iphelper() -> Result<(), Box<dyn std::error::Error>> {
         ping_google_ipv4_recvttl::<super::IpHelperApi>()
     }
 
     fn ping_google_ipv4_recvttl<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
+        let _lock = TEST_MUTEX.lock().unwrap();
         let addrs = dns_lookup::lookup_host("google.com")?;
         let addr = addrs.iter().find(|addr| addr.is_ipv4()).unwrap();
         let mut pinger = T::new()?;
@@ -454,11 +465,12 @@ mod tests {
     }
 
     #[test]
-    fn ping_google_ipv6_recvttl_icmp_socket() {
+    fn ping_google_ipv6_recvttl_icmpsocket() {
         ping_google_ipv6_recvttl::<super::IcmpSocketApi>().unwrap();
     }
 
     fn ping_google_ipv6_recvttl<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
+        let _lock = TEST_MUTEX.lock().unwrap();
         let addrs = dns_lookup::lookup_host("google.com")?;
         let addr = addrs.iter().find(|addr| addr.is_ipv6()).unwrap();
         let target = *addr;
@@ -479,18 +491,19 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn test_ttl_ipv4_pingprotocol() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_ttl_ipv4_icmpsocket() -> Result<(), Box<dyn std::error::Error>> {
         test_ttl_ipv4::<super::IcmpSocketApi>()
     }
 
     #[cfg(target_os = "windows")]
     #[test]
     #[cfg(feature = "iphelper")]
-    fn test_ttl_ipv4_icmpprotocol() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_ttl_ipv4_iphelper() -> Result<(), Box<dyn std::error::Error>> {
         test_ttl_ipv4::<super::IpHelperApi>()
     }
 
     fn test_ttl_ipv4<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
+        let _lock = TEST_MUTEX.lock().unwrap();
         let addrs = dns_lookup::lookup_host("google.com")?;
         let addr = addrs.iter().find(|addr| addr.is_ipv4()).unwrap();
         let mut pinger = T::new()?;
@@ -514,17 +527,18 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     #[cfg(feature = "iphelper")]
-    fn test_ttl_ipv6_icmpprotocol() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_ttl_ipv6_iphelper() -> Result<(), Box<dyn std::error::Error>> {
         test_ttl_ipv6::<super::IpHelperApi>()
     }
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn test_ttl_ipv6_pingprotocol() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_ttl_ipv6_icmpsocket() -> Result<(), Box<dyn std::error::Error>> {
         test_ttl_ipv6::<super::IcmpSocketApi>()
     }
 
     fn test_ttl_ipv6<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
+        let _lock = TEST_MUTEX.lock().unwrap();
         let addrs = dns_lookup::lookup_host("google.com")?;
         let addr = addrs.iter().find(|addr| addr.is_ipv6()).unwrap();
         let mut pinger = T::new()?;
@@ -549,19 +563,20 @@ mod tests {
     }
 
     #[test]
-    fn test_ping_multiple_pingprotocol() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_ping_multiple_icmpsocket() -> Result<(), Box<dyn std::error::Error>> {
         test_ping_multiple::<super::IcmpSocketApi>()
     }
 
     #[test]
     #[cfg(windows)]
     #[cfg(feature = "iphelper")]
-    fn test_ping_multiple_icmpprotocol() -> Result<(), Box<dyn std::error::Error>> {
+    fn test_ping_multiple_iphelper() -> Result<(), Box<dyn std::error::Error>> {
         test_ping_multiple::<super::IpHelperApi>()
     }
 
     /// Test sending multiple ICMP packets to multiple addresses
     fn test_ping_multiple<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
+        let _lock = TEST_MUTEX.lock().unwrap();
         let addrs = dns_lookup::lookup_host("google.com")?;
         let ipv4addrs: Vec<IpAddr> = addrs.iter().filter(|addr| addr.is_ipv4()).cloned().collect();
         assert!(ipv4addrs.len() > 1);
@@ -578,7 +593,6 @@ mod tests {
                 IcmpResult::IcmpPacket(packet) => packet,
                 _ => unreachable!(),
             };
-            println!("{:?}", packet);
             assert!(remaining.remove(&packet.addr.ip()));
         }
         Ok(())
