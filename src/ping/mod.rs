@@ -441,6 +441,7 @@ mod tests {
     #[test]
     #[cfg(windows)]
     #[cfg(feature = "iphelper")]
+    #[cfg(not(feature = "skip-network-tests"))]
     fn ping_google_ipv4_recvttl_iphelper() -> Result<(), Box<dyn std::error::Error>> {
         ping_google_ipv4_recvttl::<super::IpHelperApi>()
     }
@@ -465,10 +466,12 @@ mod tests {
     }
 
     #[test]
+    #[cfg(not(feature = "skip-network-tests"))]
     fn ping_google_ipv6_recvttl_icmpsocket() {
         ping_google_ipv6_recvttl::<super::IcmpSocketApi>().unwrap();
     }
 
+    #[cfg(not(feature = "skip-network-tests"))]
     fn ping_google_ipv6_recvttl<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
         let _lock = TEST_MUTEX.lock().unwrap();
         let addrs = dns_lookup::lookup_host("google.com")?;
@@ -498,10 +501,12 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     #[cfg(feature = "iphelper")]
+    #[cfg(not(feature = "skip-network-tests"))]
     fn test_ttl_ipv4_iphelper() -> Result<(), Box<dyn std::error::Error>> {
         test_ttl_ipv4::<super::IpHelperApi>()
     }
 
+    #[cfg(not(feature = "skip-network-tests"))]
     fn test_ttl_ipv4<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
         let _lock = TEST_MUTEX.lock().unwrap();
         let addrs = dns_lookup::lookup_host("google.com")?;
@@ -527,16 +532,19 @@ mod tests {
     #[test]
     #[cfg(target_os = "windows")]
     #[cfg(feature = "iphelper")]
+    #[cfg(not(feature = "skip-network-tests"))]
     fn test_ttl_ipv6_iphelper() -> Result<(), Box<dyn std::error::Error>> {
         test_ttl_ipv6::<super::IpHelperApi>()
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
+    #[cfg(target_os = "linux")]
+    #[cfg(not(feature = "skip-network-tests"))]
     fn test_ttl_ipv6_icmpsocket() -> Result<(), Box<dyn std::error::Error>> {
         test_ttl_ipv6::<super::IcmpSocketApi>()
     }
 
+    #[cfg(not(feature = "skip-network-tests"))]
     fn test_ttl_ipv6<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
         let _lock = TEST_MUTEX.lock().unwrap();
         let addrs = dns_lookup::lookup_host("google.com")?;

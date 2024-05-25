@@ -38,6 +38,7 @@ features = [
 [features]
 default = ["iphelper"]
 iphelper = []
+skip-network-tests = []
 
 [dev-dependencies]
 lazy_static = "1.4.0"

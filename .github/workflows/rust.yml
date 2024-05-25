@@ -19,4 +19,8 @@ jobs:
     - name: Build
       run: cargo build --verbose
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --verbose --features skip-network-tests
+    - name: Run clippy
+      run: cargo clippy --verbose -- -D warnings
+    - name: Run fmt
+      run: cargo fmt -- --check
