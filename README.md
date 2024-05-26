@@ -11,10 +11,10 @@ time to target host, with bells and whistles.
 ```
 Command line ping, re-imagined.
 
-Usage: mping [OPTIONS] <TARGET>
+Usage: mping [OPTIONS] <TARGET>...
 
 Arguments:
-  <TARGET>  Address or name of target host
+  <TARGET>...  Address or name of target host
 
 Options:
   -r, --rate <RATE>          Number of packets per second
@@ -22,11 +22,12 @@ Options:
   -c, --count <COUNT>        Number of attempts (default infinite)
   -w, --timeout <TIMEOUT>    Timeout waiting for response in milliseconds [default: 1000]
   -l, --length <LENGTH>      Length of ICMP payload in bytes [default: 64]
-  -d, --display <DISPLAY>    Display mode [default: classic] [possible values: classic, char, dumb, char-graph, debug, none]
+  -d, --display <DISPLAY>    Display mode [default: classic] [possible values: classic, char, dumb, char-graph, debug, plot, none]
   -t, --ttl <TTL>            Time to live [default: 64]
-  -a, --api <API>            API to use [default: icmp-socket] [possible values: icmp-socket, iphelper]
+      --api <API>            API to use [default: iphelper] [possible values: icmp-socket, iphelper]
   -4, --ipv4                 Force using IPv4
   -6, --ipv6                 Force using IPv6
+  -a, --all                  Target all resolved addresses
       --summary <SUMMARY>    [default: text] [possible values: text, json, csv, none]
   -h, --help                 Print help (see more with '--help')
   -V, --version              Print version
@@ -56,6 +57,7 @@ Options:
 - IP_RECVERR support on Linux (for detailed error messages)
 - Packet loss statistics (like classic ping)
 - Show latency statistics (min, max, avg)
+- Ping multiple targets
 
 ## Missing features & ideas
 
@@ -63,6 +65,6 @@ Options:
 - Latency graph
 - Support more than 64 outstanding packets on Windows (currently limited by WaitForMultipleObjects)
 - Show receive TTL
-- Ping multiple targets
+- Horizontal scrolling display
 - IPv4 route recording
 - IPv4 timestamp

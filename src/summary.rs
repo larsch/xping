@@ -6,6 +6,8 @@ use serde_with::{serde_as, DurationSecondsWithFrac};
 #[serde_as]
 #[derive(Serialize)]
 pub struct Summary {
+    pub hostname: String,
+    pub address: std::net::IpAddr,
     pub packets_transmitted: u64,
     pub packets_received: u64,
     #[serde_as(as = "Option<DurationSecondsWithFrac<f64>>")]
@@ -20,6 +22,9 @@ pub struct Summary {
 impl Summary {
     pub fn as_text(&self) -> Result<String, std::fmt::Error> {
         let mut result = String::new();
+
+        writeln!(&mut result, "\x1b[1m{} ({})\x1b[0m:", self.hostname, self.address)?;
+
         write!(
             &mut result,
             "{} packets transmitted, {} packets received",
@@ -48,9 +53,11 @@ impl Summary {
 
     pub fn as_csv(&self) -> Result<String, std::fmt::Error> {
         let mut result = String::new();
-        write!(
+        writeln!(
             &mut result,
-            "{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{}",
+            self.hostname,
+            self.address,
             self.packets_transmitted,
             self.packets_received,
             self.minimum_rtt.map_or("".to_owned(), |d| d.as_nanos().to_string()),

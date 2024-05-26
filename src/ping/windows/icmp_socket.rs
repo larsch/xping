@@ -28,7 +28,7 @@ struct IcmpSocket {
 }
 
 impl IcmpSocket {
-    fn new(address_family: WinSock::ADDRESS_FAMILY, protocol: WinSock::IPPROTO) -> Result<Self, std::io::Error> {
+    fn new(address_family: WinSock::ADDRESS_FAMILY, protocol: WinSock::IPPROTO) -> Result<Self, crate::ping::Error> {
         match unsafe {
             WinSock::WSASocketW(
                 address_family.0 as i32,
@@ -39,7 +39,7 @@ impl IcmpSocket {
                 WinSock::WSA_FLAG_OVERLAPPED,
             )
         } {
-            WinSock::INVALID_SOCKET => Err(std::io::Error::last_os_error()),
+            WinSock::INVALID_SOCKET => Err(std::io::Error::last_os_error())?,
             socket => Ok(IcmpSocket {
                 socket,
                 overlapped: OVERLAPPED::default(),
@@ -55,21 +55,21 @@ impl IcmpSocket {
         }
     }
 
-    fn new_ipv4() -> Result<Self, std::io::Error> {
+    fn new_ipv4() -> Result<Self, crate::ping::Error> {
         let socket = Self::new(WinSock::AF_INET, WinSock::IPPROTO_ICMP)?;
         let enabled: u32 = 1;
         socket.setsockopt(WinSock::IPPROTO_IP.0, WinSock::IP_RECVTTL, &enabled)?;
         Ok(socket)
     }
 
-    fn new_ipv6() -> Result<Self, std::io::Error> {
+    fn new_ipv6() -> Result<Self, crate::ping::Error> {
         let socket = Self::new(WinSock::AF_INET6, WinSock::IPPROTO_ICMPV6)?;
         let enabled: u32 = 1;
         socket.setsockopt(WinSock::IPPROTO_IPV6.0, WinSock::IPV6_HOPLIMIT, &enabled)?;
         Ok(socket)
     }
 
-    fn setsockopt<T: Sized>(&self, level: i32, optname: i32, optval: &T) -> Result<(), std::io::Error> {
+    fn setsockopt<T: Sized>(&self, level: i32, optname: i32, optval: &T) -> Result<(), crate::ping::Error> {
         let result = unsafe {
             WinSock::setsockopt(
                 self.socket,
@@ -82,12 +82,12 @@ impl IcmpSocket {
             )
         };
         if result == WinSock::SOCKET_ERROR {
-            return Err(std::io::Error::last_os_error());
+            return Err(std::io::Error::last_os_error())?;
         }
         Ok(())
     }
 
-    fn send(&mut self, target: IpAddr, length: usize, sequence: u16, timestamp: u64) -> Result<(), std::io::Error> {
+    fn send(&mut self, target: IpAddr, length: usize, sequence: u16, timestamp: u64) -> Result<(), crate::ping::Error> {
         let icmp_type = match target {
             IpAddr::V4(_) => 8,
             IpAddr::V6(_) => 128,
@@ -124,7 +124,7 @@ impl IcmpSocket {
 
         if result == WinSock::SOCKET_ERROR {
             let err = unsafe { WinSock::WSAGetLastError() };
-            return Err(std::io::Error::from_raw_os_error(err.0 as i32));
+            return Err(std::io::Error::from_raw_os_error(err.0 as i32))?;
         }
 
         self.has_sent = true;
@@ -132,7 +132,7 @@ impl IcmpSocket {
         Ok(())
     }
 
-    fn recv(&mut self) -> Result<Option<IcmpResult>, std::io::Error> {
+    fn recv(&mut self) -> Result<Option<IcmpResult>, crate::ping::Error> {
         if !self.has_sent {
             // Trying to receive before sending causes WinSock to fail with
             // "invalid argument"
@@ -201,7 +201,7 @@ impl IcmpSocket {
                     if err != WinSock::WSA_IO_PENDING {
                         unsafe { WinSock::WSACloseEvent(self.overlapped.hEvent) }.unwrap();
                         self.overlapped.hEvent = HANDLE::default();
-                        return Err(std::io::Error::from_raw_os_error(err.0 as i32));
+                        return Err(std::io::Error::from_raw_os_error(err.0 as i32))?;
                     }
                     Ok(None)
                 }
@@ -213,7 +213,7 @@ impl IcmpSocket {
         }
     }
 
-    fn get_overlapped_result(&mut self) -> Result<IcmpResult, std::io::Error> {
+    fn get_overlapped_result(&mut self) -> Result<IcmpResult, crate::ping::Error> {
         let mut flags = 0u32;
         let mut bytes_received = 0u32;
 
@@ -243,7 +243,7 @@ impl IcmpSocket {
         }
     }
 
-    fn complete_recv(&mut self, sa: SocketAddr, bytes_received: u32) -> Result<IcmpResult, std::io::Error> {
+    fn complete_recv(&mut self, sa: SocketAddr, bytes_received: u32) -> Result<IcmpResult, crate::ping::Error> {
         let mut ttl: Option<u32> = None;
 
         if self.wsarecvmsg.is_some() {
@@ -300,7 +300,7 @@ impl Drop for IcmpSocket {
 }
 
 impl crate::ping::IcmpApi for IcmpSocketApi {
-    fn new() -> Result<Self, std::io::Error> {
+    fn new() -> Result<Self, crate::ping::Error> {
         initialize_winsock()?;
         Ok(IcmpSocketApi {
             socket4: None,
@@ -309,7 +309,7 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
         })
     }
 
-    fn set_ttl(&mut self, ttl: u8) -> Result<(), std::io::Error> {
+    fn set_ttl(&mut self, ttl: u8) -> Result<(), crate::ping::Error> {
         if let Some(socket4) = &mut self.socket4 {
             let ttl = ttl as u32;
             socket4.setsockopt(WinSock::IPPROTO_IP.0, WinSock::IP_TTL, &ttl)?;
@@ -324,14 +324,14 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
         Ok(())
     }
 
-    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16, timestamp: u64) -> Result<(), std::io::Error> {
+    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16, timestamp: u64) -> Result<(), crate::ping::Error> {
         match target {
             IpAddr::V4(_) => self.get_socket4()?.send(target, length, sequence, timestamp),
             IpAddr::V6(_) => self.get_socket6()?.send(target, length, sequence, timestamp),
         }
     }
 
-    fn recv(&mut self, timeout: std::time::Duration) -> Result<IcmpResult, std::io::Error> {
+    fn recv(&mut self, timeout: std::time::Duration) -> Result<IcmpResult, crate::ping::Error> {
         if let Some(socket4) = &mut self.socket4 {
             if let Some(answer) = socket4.recv()? {
                 return Ok(answer);
@@ -361,7 +361,7 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
 
         match rc.0 {
             WinSock::WSA_WAIT_TIMEOUT => Ok(IcmpResult::Timeout),
-            WinSock::WSA_WAIT_FAILED => Err(std::io::Error::from_raw_os_error(unsafe { WinSock::WSAGetLastError() }.0 as i32)),
+            WinSock::WSA_WAIT_FAILED => Err(std::io::Error::from_raw_os_error(unsafe { WinSock::WSAGetLastError() }.0 as i32))?,
             n => {
                 let index = n - WinSock::WSA_WAIT_EVENT_0.0 as u32;
                 let event_handle = events[index as usize];
@@ -370,7 +370,8 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
                     if socket4.overlapped.hEvent == event_handle {
                         return socket4.get_overlapped_result();
                     }
-                } else if let Some(socket6) = &mut self.socket6 {
+                }
+                if let Some(socket6) = &mut self.socket6 {
                     if socket6.overlapped.hEvent == event_handle {
                         return socket6.get_overlapped_result();
                     }
@@ -381,18 +382,19 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
     }
 }
 
-fn initialize_winsock() -> Result<(), std::io::Error> {
+fn initialize_winsock() -> Result<(), crate::ping::Error> {
     let mut wsadata = WinSock::WSADATA::default();
     const VERSION_REQUESTED: u16 = 0x0202;
     let result = unsafe { WinSock::WSAStartup(VERSION_REQUESTED, &mut wsadata) };
     if result != 0 {
-        return Err(std::io::Error::from_raw_os_error(result));
+        Err(std::io::Error::from_raw_os_error(result))?
+    } else {
+        Ok(())
     }
-    Ok(())
 }
 
 impl IcmpSocketApi {
-    fn get_socket4(&mut self) -> Result<&mut IcmpSocket, std::io::Error> {
+    fn get_socket4(&mut self) -> Result<&mut IcmpSocket, crate::ping::Error> {
         if self.socket4.is_none() {
             self.socket4 = Some(IcmpSocket::new_ipv4()?);
             if let Some(ttl) = self.ttl {
@@ -409,7 +411,7 @@ impl IcmpSocketApi {
         Ok(self.socket4.as_mut().unwrap())
     }
 
-    fn get_socket6(&mut self) -> Result<&mut IcmpSocket, std::io::Error> {
+    fn get_socket6(&mut self) -> Result<&mut IcmpSocket, crate::ping::Error> {
         if self.socket6.is_none() {
             self.socket6 = Some(IcmpSocket::new_ipv6()?);
             let enabled: u32 = 1;
@@ -432,7 +434,7 @@ impl IcmpSocketApi {
     }
 }
 
-fn get_wsarecvmsg(socket: WinSock::SOCKET) -> Result<WinSock::LPFN_WSARECVMSG, std::io::Error> {
+fn get_wsarecvmsg(socket: WinSock::SOCKET) -> Result<WinSock::LPFN_WSARECVMSG, crate::ping::Error> {
     let mut recvmsg_function_pointer: *const std::ffi::c_void = std::ptr::null_mut();
     let mut bytes_returned = 0u32;
 
@@ -455,7 +457,7 @@ fn get_wsarecvmsg(socket: WinSock::SOCKET) -> Result<WinSock::LPFN_WSARECVMSG, s
         if err == WinSock::WSAEOPNOTSUPP {
             return Ok(None);
         } else {
-            return Err(std::io::Error::from_raw_os_error(err.0 as i32));
+            Err(std::io::Error::from_raw_os_error(err.0 as i32))?;
         }
     }
 

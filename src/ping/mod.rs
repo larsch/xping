@@ -18,18 +18,39 @@ mod windows;
 #[cfg(target_os = "windows")]
 pub use windows::IcmpSocketApi;
 
+#[cfg(feature = "anyhow")]
+type Error = anyhow::Error;
+
+#[cfg(not(feature = "anyhow"))]
+type Error = std::io::Error;
+
 pub trait IcmpApi {
-    fn new() -> Result<Self, std::io::Error>
+    fn new() -> Result<Self, Error>
     where
         Self: Sized;
 
     /// Set the TTL (time-to-live) of ICMP packets sent using the send() method.
-    fn set_ttl(&mut self, ttl: u8) -> Result<(), std::io::Error>;
+    fn set_ttl(&mut self, ttl: u8) -> Result<(), Error>;
 
     /// Send an ICMP packet with the given sequence number and timestamp. The
     /// timestamp is inserted into the ICMP payload and can be used to calculate
     /// the round-trip time.
-    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16, timestamp: u64) -> Result<(), std::io::Error>;
+    ///
+    /// # Arguments
+    /// * `target` - The target IP address
+    /// * `length` - The length of the ICMP payload
+    /// * `seq` - The sequence number of the packet
+    /// * `timestamp` - The timestamp to insert into the ICMP payload
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if the underlying IO causes an
+    /// unexpected error.
+    ///
+    /// # Returns
+    ///
+    /// This function will return Ok(()) if the packet was sent successfully.
+    fn send(&mut self, target: std::net::IpAddr, length: usize, seq: u16, timestamp: u64) -> Result<(), Error>;
 
     /// Wait for the next ICMP packet, error, or timeout. Returns the received
     /// packet or error. Doesn't return an Error on expected ICMP errors (such
@@ -39,7 +60,7 @@ pub trait IcmpApi {
     ///
     /// This function will return an error if the underlying IO causes an
     /// unexpected error.
-    fn recv(&mut self, timeout: std::time::Duration) -> Result<IcmpResult, std::io::Error>;
+    fn recv(&mut self, timeout: std::time::Duration) -> Result<IcmpResult, Error>;
 }
 
 #[derive(Debug)]
@@ -119,7 +140,7 @@ pub struct IcmpPacket {
 #[derive(Debug)]
 pub struct RecvError {
     // The OS error that occurred (if any)
-    pub error: Option<std::io::Error>,
+    pub error: Option<Error>,
     // The source address if available (The host that sent the error message)
     pub addr: Option<SocketAddr>,
     // The original ICMP message if included in the error

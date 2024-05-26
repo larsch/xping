@@ -3,11 +3,18 @@ use clap::Parser;
 #[derive(clap::ValueEnum, Clone, Debug, Default)]
 pub enum DisplayMode {
     #[default]
+    #[value(alias("a"))]
     Classic,
+    #[value(alias("c"))]
     Char,
     Dumb,
+    #[value(alias("g"))]
     CharGraph,
+    #[value(alias("d"))]
     Debug,
+    #[value(alias("p"))]
+    Plot,
+    #[value(alias("n"))]
     None,
 }
 
@@ -55,8 +62,8 @@ pub struct Args {
     pub length: usize,
 
     /// Address or name of target host
-    #[arg()]
-    pub target: String,
+    #[arg(required = true)]
+    pub target: Vec<String>,
 
     /// Display mode
     #[arg(short, long, default_value = "classic")]
@@ -67,7 +74,12 @@ pub struct Args {
     pub ttl: u8,
 
     /// API to use
-    #[arg(short, long, default_value = "icmp-socket")]
+    #[cfg(windows)]
+    #[arg(long, default_value = "iphelper")]
+    pub api: Api,
+
+    #[cfg(not(windows))]
+    #[arg(long, default_value = "icmp-socket")]
     pub api: Api,
 
     #[command(flatten)]
@@ -91,4 +103,8 @@ pub struct ForceIp {
     /// Force using IPv6
     #[arg(short = '6', long)]
     pub ipv6: bool,
+
+    /// Target all resolved addresses
+    #[arg(short, long)]
+    pub all: bool,
 }
