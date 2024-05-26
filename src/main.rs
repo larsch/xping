@@ -177,6 +177,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         args::DisplayMode::Plot => Box::new(display::HorizontalPlotDisplayMode::new(columns, rows)),
         args::DisplayMode::Debug => Box::new(display::DebugDisplayMode::new(columns, rows)),
         args::DisplayMode::None => Box::new(display::NoneDisplayMode::new(columns, rows)),
+        args::DisplayMode::Influx => Box::new(display::InfluxLineProtocolDisplayMode::new(columns, rows)),
     };
 
     for (index, target) in targets.iter().enumerate() {

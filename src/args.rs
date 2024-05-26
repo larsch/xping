@@ -16,6 +16,8 @@ pub enum DisplayMode {
     Plot,
     #[value(alias("n"))]
     None,
+    #[value(alias("i"))]
+    Influx,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug, Default)]

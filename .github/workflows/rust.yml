@@ -18,14 +18,17 @@ jobs:
     - uses: actions/checkout@v4
     - name: Build
       run: cargo build --verbose
+    - name: Check with anyhow
+      run: cargo check --verbose -F anyhow
     - name: Run tests
       run: cargo test --verbose --features skip-network-tests
     - name: Run clippy
-      run: cargo clippy --verbose -- -D warnings
+      run: cargo clippy --release --verbose -- -D warnings
+    - name: Run clippy, anyhow
+      run: cargo clippy -F anyhow --release --verbose -- -D warnings
     - name: Run fmt
       run: cargo fmt -- --check
     - name: Run IPv4 ping
       run: cargo run --bin mping -- 127.0.0.1 -c 4 --rate 20
     - name: Run IPv6 ping
       run: cargo run --bin mping -- ::1 -c 4 --rate 20
-

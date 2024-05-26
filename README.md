@@ -22,7 +22,7 @@ Options:
   -c, --count <COUNT>        Number of attempts (default infinite)
   -w, --timeout <TIMEOUT>    Timeout waiting for response in milliseconds [default: 1000]
   -l, --length <LENGTH>      Length of ICMP payload in bytes [default: 64]
-  -d, --display <DISPLAY>    Display mode [default: classic] [possible values: classic, char, dumb, char-graph, debug, plot, none]
+  -d, --display <DISPLAY>    Display mode [default: classic] [possible values: classic, char, dumb, char-graph, debug, plot, none, influx]
   -t, --ttl <TTL>            Time to live [default: 64]
       --api <API>            API to use [default: iphelper] [possible values: icmp-socket, iphelper]
   -4, --ipv4                 Force using IPv4

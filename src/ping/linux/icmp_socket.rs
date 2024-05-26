@@ -8,7 +8,7 @@ struct IcmpSocket {
 }
 
 impl IcmpSocket {
-    fn new(address_family: libc::c_int, protocol: libc::c_int) -> Result<IcmpSocket, std::io::Error> {
+    fn new(address_family: libc::c_int, protocol: libc::c_int) -> Result<IcmpSocket, crate::ping::Error> {
         let socket = unsafe { libc::socket(address_family, libc::SOCK_DGRAM | libc::SOCK_NONBLOCK, protocol) };
         if socket < 0 {
             return Err(std::io::Error::last_os_error())?;
@@ -23,7 +23,7 @@ impl IcmpSocket {
 
         Ok(sock)
     }
-    fn new_ipv4() -> Result<IcmpSocket, std::io::Error> {
+    fn new_ipv4() -> Result<IcmpSocket, crate::ping::Error> {
         let mut sock = Self::new(libc::AF_INET, libc::IPPROTO_ICMP)?;
         let enabled: libc::c_int = 1;
         sock.setsockopt(libc::IPPROTO_IP, libc::IP_RECVERR, &enabled)?;
@@ -31,7 +31,7 @@ impl IcmpSocket {
         Ok(sock)
     }
 
-    fn new_ipv6() -> Result<IcmpSocket, std::io::Error> {
+    fn new_ipv6() -> Result<IcmpSocket, crate::ping::Error> {
         let mut sock = Self::new(libc::AF_INET6, libc::IPPROTO_ICMPV6)?;
         let enabled: libc::c_int = 1;
         sock.setsockopt(libc::IPPROTO_IPV6, libc::IPV6_RECVERR, &enabled)?;
@@ -39,7 +39,7 @@ impl IcmpSocket {
         Ok(sock)
     }
 
-    fn set_ipv4_ttl(&mut self, ttl: u8) -> Result<(), std::io::Error> {
+    fn set_ipv4_ttl(&mut self, ttl: u8) -> Result<(), crate::ping::Error> {
         let ttl: libc::c_int = ttl as libc::c_int;
         self.setsockopt(libc::IPPROTO_IP, libc::IP_MULTICAST_TTL, &ttl)?;
         self.setsockopt(libc::IPPROTO_IP, libc::IP_TTL, &ttl)?;
@@ -77,7 +77,7 @@ impl IcmpSocket {
         Ok(())
     }
 
-    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16, timestamp: u64) -> Result<(), std::io::Error> {
+    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16, timestamp: u64) -> Result<(), crate::ping::Error> {
         self.packet.resize(length + 8, 0u8);
         let icmp_type = match target {
             std::net::IpAddr::V4(_) => 0x08,
@@ -104,14 +104,14 @@ impl IcmpSocket {
             let last_error = std::io::Error::last_os_error();
             match last_error.kind() {
                 std::io::ErrorKind::WouldBlock => Ok(()),
-                _ => Err(last_error),
+                _ => Err(last_error)?,
             }
         } else {
             Ok(())
         }
     }
 
-    fn recv(&mut self) -> Result<crate::ping::IcmpResult, std::io::Error> {
+    fn recv(&mut self) -> Result<crate::ping::IcmpResult, crate::ping::Error> {
         let mut buf = [0u8; 65536];
         let buf_ptr = &mut buf as *mut u8 as *mut libc::c_void;
         // let flags = 0;
@@ -225,7 +225,8 @@ impl IcmpSocket {
             if let Some(extended_error) = extended_error {
                 Ok(crate::ping::IcmpResult::RecvError(crate::ping::RecvError {
                     addr: Some(addr),
-                    error: Some(std::io::Error::from_raw_os_error(extended_error.errno)),
+                    #[allow(clippy::useless_conversion)]
+                    error: Some(std::io::Error::from_raw_os_error(extended_error.errno).into()),
                     icmp_type: Some(extended_error.icmp_type),
                     icmp_code: Some(extended_error.icmp_code),
                     offender: extended_error.offender,
@@ -238,7 +239,8 @@ impl IcmpSocket {
             } else {
                 Ok(crate::ping::IcmpResult::RecvError(crate::ping::RecvError {
                     addr: Some(addr),
-                    error: Some(orig_error.unwrap()),
+                    #[allow(clippy::useless_conversion)]
+                    error: Some(orig_error.unwrap().into()),
                     icmp_type: None,
                     icmp_code: None,
                     offender: None,
@@ -262,7 +264,7 @@ impl Drop for IcmpSocket {
 }
 
 impl crate::ping::IcmpApi for IcmpSocketApi {
-    fn new() -> Result<Self, std::io::Error> {
+    fn new() -> Result<Self, crate::ping::Error> {
         Ok(Self {
             socket4: None,
             socket6: None,
@@ -270,7 +272,7 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
         })
     }
 
-    fn set_ttl(&mut self, ttl: u8) -> Result<(), std::io::Error> {
+    fn set_ttl(&mut self, ttl: u8) -> Result<(), crate::ping::Error> {
         if let Some(socket4) = self.socket4.as_mut() {
             socket4.set_ipv4_ttl(ttl)?;
         }
@@ -281,14 +283,14 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
         Ok(())
     }
 
-    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16, timestamp: u64) -> Result<(), std::io::Error> {
+    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16, timestamp: u64) -> Result<(), crate::ping::Error> {
         match target {
             std::net::IpAddr::V4(_) => self.get_socket4()?.send(target, length, sequence, timestamp),
             std::net::IpAddr::V6(_) => self.get_socket6()?.send(target, length, sequence, timestamp),
         }
     }
 
-    fn recv(&mut self, timeout: std::time::Duration) -> Result<crate::ping::IcmpResult, std::io::Error> {
+    fn recv(&mut self, timeout: std::time::Duration) -> Result<crate::ping::IcmpResult, crate::ping::Error> {
         let epoll_fd = unsafe { libc::epoll_create1(0) };
         if epoll_fd < 0 {
             return Err(std::io::Error::last_os_error())?;
@@ -355,7 +357,7 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
 }
 
 impl IcmpSocketApi {
-    fn get_socket4(&mut self) -> Result<&mut IcmpSocket, std::io::Error> {
+    fn get_socket4(&mut self) -> Result<&mut IcmpSocket, crate::ping::Error> {
         if self.socket4.is_none() {
             self.socket4 = Some(IcmpSocket::new_ipv4()?);
             if let Some(ttl) = self.ttl {
@@ -365,7 +367,7 @@ impl IcmpSocketApi {
         Ok(self.socket4.as_mut().unwrap())
     }
 
-    fn get_socket6(&mut self) -> Result<&mut IcmpSocket, std::io::Error> {
+    fn get_socket6(&mut self) -> Result<&mut IcmpSocket, crate::ping::Error> {
         if self.socket6.is_none() {
             self.socket6 = Some(IcmpSocket::new_ipv6()?);
             if let Some(ttl) = self.ttl {
