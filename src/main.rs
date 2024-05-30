@@ -3,6 +3,7 @@
 
 mod args;
 mod display;
+mod duration;
 mod ping;
 mod summary;
 
