@@ -49,8 +49,8 @@ pub trait IcmpApi {
     ///
     /// # Returns
     ///
-    /// This function will return Ok(()) if the packet was sent successfully.
-    fn send(&mut self, target: std::net::IpAddr, length: usize, seq: u16, timestamp: u64) -> Result<(), Error>;
+    /// The function returns the time when the packet was sent.
+    fn send(&mut self, target: std::net::IpAddr, length: usize, seq: u16) -> Result<std::time::SystemTime, Error>;
 
     /// Wait for the next ICMP packet, error, or timeout. Returns the received
     /// packet or error. Doesn't return an Error on expected ICMP errors (such
@@ -110,12 +110,22 @@ pub struct IcmpMessage {
     pub icmp_type: IcmpType,
     pub id: u16,
     pub seq: u16,
-    pub timestamp: Option<u64>,
+    pub timestamp: Option<std::time::SystemTime>,
 }
+
+// Todo: refactor result, be one of
+// - IcmpEchoResponse:
+//   - Local timestamp
+//   - OS rx timestamp
+//   - Recvttl
+// - IcmpError
+//   - Local timestamp
+//   - offender
+//   - icmp_type/code
 
 #[derive(Debug)]
 pub enum IcmpResult {
-    IcmpPacket(IcmpPacket),
+    IcmpPacket(IcmpEchoResponse),
     #[allow(dead_code)]
     RecvError(RecvError),
     Timeout,
@@ -125,15 +135,17 @@ pub enum IcmpResult {
 
 // A received ICMP packet
 #[derive(Debug)]
-pub struct IcmpPacket {
+pub struct IcmpEchoResponse {
     // The source address
     pub addr: SocketAddr,
     // The receive ICMP message
     pub message: IcmpMessage,
     // The local time when the packet was received
-    pub time: std::time::Instant,
+    pub timestamp: std::time::SystemTime,
     // The received TTL of the received packet (remaining hops to destination)
     pub recvttl: Option<u32>,
+    /// OS timestamp of the packet
+    pub socket_timestamp: Option<std::time::SystemTime>,
 }
 
 // An error that occurred while receiving an ICMP packet
@@ -152,7 +164,7 @@ pub struct RecvError {
     // ICMP code
     pub icmp_code: Option<u8>,
     // The local time when the error occurred
-    pub time: std::time::Instant,
+    pub time: std::time::SystemTime,
 }
 
 pub fn ipv4unreach_to_string(unreach: &Result<IPv4DestinationUnreachable, u8>) -> String {
@@ -231,6 +243,15 @@ impl Display for IPv4DestinationUnreachable {
     }
 }
 
+pub fn timestamp_from_payload(payload: &[u8]) -> Option<std::time::SystemTime> {
+    if payload.len() < 16 {
+        return None;
+    }
+    let seconds = u64::from_le_bytes(payload[0..8].try_into().unwrap());
+    let nanoseconds = u64::from_le_bytes(payload[8..16].try_into().unwrap());
+    Some(std::time::UNIX_EPOCH + std::time::Duration::new(seconds, nanoseconds as u32))
+}
+
 fn parse_icmp_packet(packet: &[u8]) -> Option<IcmpMessage> {
     let icmp_type = packet[0];
 
@@ -259,11 +280,7 @@ fn parse_icmp_packet(packet: &[u8]) -> Option<IcmpMessage> {
 
     let identifier = u16::from_be_bytes(icmp_packet[4..6].try_into().unwrap());
     let sequence = u16::from_be_bytes(icmp_packet[6..8].try_into().unwrap());
-    let timestamp = if icmp_packet.len() >= 16 {
-        Some(u64::from_be_bytes(icmp_packet[8..16].try_into().unwrap()))
-    } else {
-        None
-    };
+    let timestamp = timestamp_from_payload(&icmp_packet[8..]);
 
     Some(IcmpMessage {
         icmp_type: reply,
@@ -302,8 +319,10 @@ fn parse_icmpv6_packet(packet: &[u8]) -> Option<IcmpMessage> {
 
     let identifier = u16::from_be_bytes(icmp_packet[4..6].try_into().unwrap());
     let sequence = u16::from_be_bytes(icmp_packet[6..8].try_into().unwrap());
-    let timestamp = if icmp_packet.len() >= 16 {
-        Some(u64::from_be_bytes(icmp_packet[8..16].try_into().unwrap()))
+    let timestamp = if icmp_packet.len() >= 24 {
+        let seconds = u64::from_le_bytes(icmp_packet[8..16].try_into().unwrap());
+        let nanoseconds = u64::from_le_bytes(icmp_packet[16..24].try_into().unwrap());
+        Some(std::time::UNIX_EPOCH + std::time::Duration::new(seconds, nanoseconds as u32))
     } else {
         None
     };
@@ -316,20 +335,25 @@ fn parse_icmpv6_packet(packet: &[u8]) -> Option<IcmpMessage> {
     })
 }
 
-fn construct_icmp_payload(payload: &mut [u8], timestamp: u64) {
-    payload[0..8].copy_from_slice(&timestamp.to_be_bytes());
-    for (i, item) in payload.iter_mut().enumerate().skip(8) {
+fn construct_icmp_payload(payload: &mut [u8], timestamp: std::time::SystemTime) {
+    let timestamp = timestamp.duration_since(std::time::UNIX_EPOCH).unwrap();
+    // Copy the timestamp into the payload, Wireshark format
+    payload[0..8].copy_from_slice(&timestamp.as_secs().to_le_bytes());
+    payload[8..16].copy_from_slice(&(timestamp.subsec_nanos() as u64).to_le_bytes());
+    // Fill the rest of the payload with incrementing numbers
+    for (i, item) in payload.iter_mut().enumerate().skip(16) {
         *item = i as u8;
     }
 }
 
-fn construct_icmp_packet(packet: &mut [u8], icmp_type: u8, code: u8, id: u16, seq: u16, timestamp: u64) {
+fn construct_icmp_packet(packet: &mut [u8], icmp_type: u8, code: u8, id: u16, seq: u16, timestamp: std::time::SystemTime) {
     packet[0] = icmp_type; // echo request
     packet[1] = code;
     packet[2] = 0; // checksum msb
     packet[3] = 0; // checksum lsb
     packet[4..6].copy_from_slice(&id.to_be_bytes());
     packet[6..8].copy_from_slice(&seq.to_be_bytes());
+
     construct_icmp_payload(&mut packet[8..], timestamp);
 
     unsafe {
@@ -387,9 +411,8 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_secs(1));
         let target = IpAddr::V4(Ipv4Addr::LOCALHOST);
         let mut pinger = T::new().unwrap();
-        let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
-        pinger.send(target, 64, sequence, timestamp).unwrap();
+        let tx_timestamp = pinger.send(target, 64, sequence).unwrap();
         let packet = pinger.recv(std::time::Duration::from_secs(1)).unwrap();
         // must always be a IcmpPacket
         assert!(matches!(packet, IcmpResult::IcmpPacket(_)));
@@ -401,7 +424,7 @@ mod tests {
         assert!(matches!(packet.message.icmp_type, IcmpType::EchoReply(_)));
         assert_eq!(
             packet.message.timestamp,
-            Some(timestamp),
+            Some(tx_timestamp),
             "Packet timestamp must be the same as the sent timestamp"
         );
         assert_eq!(
@@ -409,6 +432,11 @@ mod tests {
             "Packet sequence must be the same as the sent sequence"
         );
         assert_eq!(packet.addr.ip(), target, "Packet source address must be the target address");
+        if let Some(timestamp) = packet.socket_timestamp {
+            let rtt = timestamp.duration_since(tx_timestamp).unwrap();
+            println!("Round trip time: {:?}", rtt);
+            assert!(timestamp >= tx_timestamp);
+        }
     }
 
     #[test]
@@ -427,9 +455,8 @@ mod tests {
         let _lock = TEST_MUTEX.lock().unwrap();
         let target = IpAddr::V6(Ipv6Addr::LOCALHOST);
         let mut pinger = T::new().unwrap();
-        let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
-        pinger.send(target, 64, sequence, timestamp).unwrap();
+        let timestamp = pinger.send(target, 64, sequence).unwrap();
         let packet = pinger.recv(std::time::Duration::from_secs(1)).unwrap();
         // must always be a IcmpPacket
         assert!(matches!(packet, IcmpResult::IcmpPacket(_)));
@@ -474,9 +501,8 @@ mod tests {
         let addrs = dns_lookup::lookup_host("google.com")?;
         let addr = addrs.iter().find(|addr| addr.is_ipv4()).unwrap();
         let mut pinger = T::new()?;
-        let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
-        pinger.send(*addr, 64, sequence, timestamp)?;
+        let timestamp = pinger.send(*addr, 64, sequence)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
         assert!(matches!(packet, IcmpResult::IcmpPacket(_)));
         let packet = match packet {
@@ -501,9 +527,8 @@ mod tests {
         let addr = addrs.iter().find(|addr| addr.is_ipv6()).unwrap();
         let target = *addr;
         let mut pinger = T::new()?;
-        let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
-        pinger.send(target, 64, sequence, timestamp)?;
+        let timestamp = pinger.send(target, 64, sequence)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
         assert!(matches!(packet, IcmpResult::IcmpPacket(_)));
         let packet = match packet {
@@ -536,10 +561,9 @@ mod tests {
         let addrs = dns_lookup::lookup_host("google.com")?;
         let addr = addrs.iter().find(|addr| addr.is_ipv4()).unwrap();
         let mut pinger = T::new()?;
-        let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
         pinger.set_ttl(4)?;
-        pinger.send(*addr, 64, sequence, timestamp)?;
+        let timestamp = pinger.send(*addr, 64, sequence)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
         assert!(matches!(packet, IcmpResult::RecvError(_)));
         let err = match packet {
@@ -577,7 +601,7 @@ mod tests {
         let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
         pinger.set_ttl(4)?;
-        pinger.send(*addr, 64, sequence, timestamp)?;
+        let timestamp = pinger.send(*addr, 64, sequence)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
         assert!(matches!(packet, IcmpResult::RecvError(_)));
         let err = match packet {
@@ -616,10 +640,9 @@ mod tests {
         let ipv4addrs: Vec<IpAddr> = addrs.iter().filter(|addr| addr.is_ipv4()).cloned().collect();
         assert!(ipv4addrs.len() > 1);
         let mut pinger = T::new()?;
-        let timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
         for addr in &ipv4addrs {
-            pinger.send(*addr, 64, sequence, timestamp)?;
+            pinger.send(*addr, 64, sequence)?;
         }
         let mut remaining: std::collections::HashSet<IpAddr> = ipv4addrs.iter().cloned().collect();
         while !remaining.is_empty() {

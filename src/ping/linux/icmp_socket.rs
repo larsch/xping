@@ -26,6 +26,7 @@ impl IcmpSocket {
     fn new_ipv4() -> Result<IcmpSocket, crate::ping::Error> {
         let mut sock = Self::new(libc::AF_INET, libc::IPPROTO_ICMP)?;
         let enabled: libc::c_int = 1;
+        sock.setsockopt(libc::SOL_SOCKET, libc::SO_TIMESTAMPNS, &enabled)?;
         sock.setsockopt(libc::IPPROTO_IP, libc::IP_RECVERR, &enabled)?;
         sock.setsockopt(libc::IPPROTO_IP, libc::IP_RECVTTL, &enabled)?;
         Ok(sock)
@@ -34,6 +35,7 @@ impl IcmpSocket {
     fn new_ipv6() -> Result<IcmpSocket, crate::ping::Error> {
         let mut sock = Self::new(libc::AF_INET6, libc::IPPROTO_ICMPV6)?;
         let enabled: libc::c_int = 1;
+        sock.setsockopt(libc::SOL_SOCKET, libc::SO_TIMESTAMPNS, &enabled)?;
         sock.setsockopt(libc::IPPROTO_IPV6, libc::IPV6_RECVERR, &enabled)?;
         sock.setsockopt(libc::IPPROTO_IPV6, libc::IPV6_RECVHOPLIMIT, &enabled)?;
         Ok(sock)
@@ -77,7 +79,7 @@ impl IcmpSocket {
         Ok(())
     }
 
-    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16, timestamp: u64) -> Result<(), crate::ping::Error> {
+    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16) -> Result<std::time::SystemTime, crate::ping::Error> {
         self.packet.resize(length + 8, 0u8);
         let icmp_type = match target {
             std::net::IpAddr::V4(_) => 0x08,
@@ -85,6 +87,7 @@ impl IcmpSocket {
         };
         let code = 0;
         let id = sequence;
+        let timestamp = std::time::SystemTime::now();
         crate::ping::construct_icmp_packet(&mut self.packet, icmp_type, code, id, sequence, timestamp);
 
         let target = SockAddr::from(SocketAddr::new(target, 0));
@@ -103,11 +106,11 @@ impl IcmpSocket {
         if result < 0 {
             let last_error = std::io::Error::last_os_error();
             match last_error.kind() {
-                std::io::ErrorKind::WouldBlock => Ok(()),
+                std::io::ErrorKind::WouldBlock => Ok(timestamp),
                 _ => Err(last_error)?,
             }
         } else {
-            Ok(())
+            Ok(timestamp)
         }
     }
 
@@ -125,6 +128,7 @@ impl IcmpSocket {
 
         #[allow(unused_assignments)]
         let mut rxtime = None;
+        let mut rx_timestamp = None;
 
         let mut recvttl = None;
 
@@ -156,7 +160,7 @@ impl IcmpSocket {
             // println!("msghdr.msg_flags = {}", msghdr.msg_flags);
             // println!("{:08x}", buf_ptr as usize);
             let result = unsafe { libc::recvmsg(self.socket, &mut msghdr, recvmsg_flags) };
-            rxtime = Some(std::time::Instant::now());
+            rxtime = Some(std::time::SystemTime::now());
 
             if result < 0 {
                 if recvmsg_flags == 0 {
@@ -198,6 +202,25 @@ impl IcmpSocket {
                                 recvttl = Some(ttl);
                             }
                         }
+                        libc::SCM_TIMESTAMPNS => {
+                            if data.len() >= std::mem::size_of::<libc::timespec>() {
+                                let ts = unsafe { &*(dataptr as *const libc::timespec) };
+                                rx_timestamp = Some(
+                                    std::time::SystemTime::UNIX_EPOCH
+                                        + std::time::Duration::from_nanos(ts.tv_sec as u64 * 1_000_000_000 + ts.tv_nsec as u64),
+                                );
+                            }
+                        }
+                        libc::SCM_TIMESTAMP => {
+                            if data.len() >= std::mem::size_of::<libc::timeval>() {
+                                let tv = unsafe { &*(dataptr as *const libc::timeval) };
+                                rx_timestamp = Some(
+                                    std::time::SystemTime::UNIX_EPOCH
+                                        + std::time::Duration::from_secs(tv.tv_sec as u64)
+                                        + std::time::Duration::from_micros(tv.tv_usec as u64),
+                                );
+                            }
+                        }
                         _ => todo!("{:?}", cmsg_type),
                     }
                     cmsg = unsafe { libc::CMSG_NXTHDR(&msghdr, cmsg) };
@@ -209,13 +232,14 @@ impl IcmpSocket {
         if recvmsg_flags & libc::MSG_ERRQUEUE == 0 {
             let packet = &buf[..received_bytes.max(0)];
             let addr = addr.try_into().unwrap();
-            Ok(crate::ping::IcmpResult::IcmpPacket(crate::ping::IcmpPacket {
+            Ok(crate::ping::IcmpResult::IcmpPacket(crate::ping::IcmpEchoResponse {
                 addr,
                 message: match addr {
                     SocketAddr::V4(_) => crate::ping::parse_icmp_packet(packet).unwrap(),
                     SocketAddr::V6(_) => crate::ping::parse_icmpv6_packet(packet).unwrap(),
                 },
-                time: rxtime.unwrap(),
+                timestamp: rxtime.unwrap(),
+                socket_timestamp: rx_timestamp,
                 recvttl,
             }))
         } else {
@@ -283,10 +307,10 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
         Ok(())
     }
 
-    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16, timestamp: u64) -> Result<(), crate::ping::Error> {
+    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16) -> Result<std::time::SystemTime, crate::ping::Error> {
         match target {
-            std::net::IpAddr::V4(_) => self.get_socket4()?.send(target, length, sequence, timestamp),
-            std::net::IpAddr::V6(_) => self.get_socket6()?.send(target, length, sequence, timestamp),
+            std::net::IpAddr::V4(_) => self.get_socket4()?.send(target, length, sequence),
+            std::net::IpAddr::V6(_) => self.get_socket6()?.send(target, length, sequence),
         }
     }
 

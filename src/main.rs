@@ -50,6 +50,43 @@ impl TargetInfo {
             total_time,
         }
     }
+
+    fn add_rtt(&mut self, round_trip_time: Duration) {
+        self.total_rtt += round_trip_time;
+        self.total_rtt_counted += 1;
+        self.minimum_rtt = Some(self.minimum_rtt.map_or(round_trip_time, |min| min.min(round_trip_time)));
+        self.maximum_rtt = Some(self.maximum_rtt.map_or(round_trip_time, |max| max.max(round_trip_time)));
+    }
+}
+
+struct Entry {
+    sequence: u64,
+    timeout: std::time::Instant,
+    tx_timestamp: std::time::SystemTime,
+    received: bool,
+}
+
+impl Entry {
+    /// Calculate the round trip time based on the tx_timestamp and the rx_timestamp in the echo response
+    fn os_timestamp_rtt(&self, echo_response: &ping::IcmpEchoResponse) -> Option<std::time::Duration> {
+        echo_response
+            .socket_timestamp
+            .map(|rx_timestamp| rx_timestamp.duration_since(self.tx_timestamp).unwrap())
+    }
+
+    fn local_rtt(&self, echo_response: &ping::IcmpEchoResponse) -> Option<std::time::Duration> {
+        echo_response
+            .message
+            .timestamp
+            .map(|timestamp| echo_response.timestamp.duration_since(timestamp).unwrap())
+    }
+
+    /// Get the round-trip-time of the packet. This function will first try to
+    /// calculate the RTT based on the OS timestamps and if that fails, it will
+    /// try to calculate the RTT based on the local timestamps.
+    fn rtt(&self, echo_response: &ping::IcmpEchoResponse) -> Option<std::time::Duration> {
+        self.os_timestamp_rtt(echo_response).or_else(|| self.local_rtt(echo_response))
+    }
 }
 
 fn lookup_host(host: &str, force_ip: &args::ForceIp) -> Option<IpAddr> {
@@ -153,20 +190,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut sequence = 0u64;
 
-    let time_reference = Instant::now();
-
     let mut attempts_left = args.count.unwrap_or(u32::MAX);
 
     let (columns, rows) = match crossterm::terminal::size() {
         Ok((w, h)) => (w - 1, h),
         Err(_) => (78, 25),
     };
-
-    struct Entry {
-        sequence: u64,
-        timeout: std::time::Instant,
-        received: bool,
-    }
 
     let mut entries = VecDeque::new();
 
@@ -197,9 +226,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let address_index = address_index_iter.next().unwrap();
             let target = &mut targets[address_index];
 
-            let timestamp = time_reference.elapsed().as_nanos() as u64;
             let icmp_sequence = sequence as u16;
-            ping_protocol.send(target.address, args.length, icmp_sequence, timestamp).unwrap();
+            let tx_timestamp = ping_protocol.send(target.address, args.length, icmp_sequence).unwrap();
             target.packets_transmitted += 1;
 
             let display_sequence = sequence / target_count as u64;
@@ -213,6 +241,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             entries.push_back(Entry {
                 sequence,
                 timeout: std::time::Instant::now() + icmp_timeout,
+                tx_timestamp,
                 received: false,
             });
             sequence += 1;
@@ -276,38 +305,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let target = &mut targets[target_index];
                     target.packets_received += 1;
 
-                    if let Some(tx_timestamp) = packet.message.timestamp {
-                        let rx_timestamp = (packet.time - time_reference).as_nanos() as u64;
-
-                        if tx_timestamp > rx_timestamp || entries.is_empty() {
-                            println!(
-                                "ignoring packet with tx_timestamp > rx_timestamp or no entries: tx_timestamp: {}, rx_timestamp: {}",
-                                tx_timestamp, rx_timestamp
-                            );
-                            continue; // Ignore responses that were sent after the receive timestamp
-                        }
-                        let nanos = rx_timestamp - tx_timestamp;
-                        let round_trip_time = std::time::Duration::from_nanos(nanos);
-                        target.total_rtt += round_trip_time;
-                        target.total_rtt_counted += 1;
-                        target.minimum_rtt = Some(target.minimum_rtt.map_or(round_trip_time, |min| min.min(round_trip_time)));
-                        target.maximum_rtt = Some(target.maximum_rtt.map_or(round_trip_time, |max| max.max(round_trip_time)));
-                        let front_sequence = entries.front().unwrap().sequence;
-                        let position = (packet.message.seq as usize + 65536 - front_sequence as usize) % 65536;
-                        if position <= entries.len() {
-                            let entry = &entries[position];
-                            let display_sequence = entry.sequence / target_count as u64;
-                            let index = entry.sequence % target_count as u64;
-                            display_mode.display_receive(index as usize, display_sequence, &packet, round_trip_time)?;
-                            if position == 0 {
-                                entries.pop_front();
-                            } else {
-                                entries[position].received = true;
-                            }
-                        }
-                    } else {
-                        println!("no timestamp found in packet: {:?}", packet);
+                    if entries.is_empty() {
+                        continue;
                     }
+
+                    let front_sequence = entries.front().unwrap().sequence;
+                    let position = (packet.message.seq as usize + 65536 - front_sequence as usize) % 65536;
+                    if position <= entries.len() {
+                        let entry = &entries[position];
+                        let display_sequence = entry.sequence / target_count as u64;
+                        let index = entry.sequence % target_count as u64;
+
+                        let round_trip_time = entry.rtt(&packet).unwrap();
+                        target.add_rtt(round_trip_time);
+
+                        display_mode.display_receive(index as usize, display_sequence, &packet, round_trip_time)?;
+                        if position == 0 {
+                            entries.pop_front();
+                        } else {
+                            entries[position].received = true;
+                        }
+                    }
+
+                    //     let nanos = rx_timestamp - tx_timestamp;
+                    //     let round_trip_time = std::time::Duration::from_nanos(nanos);
+
+                    // } else {
+                    //     println!("no timestamp found in packet: {:?}", packet);
+                    // }
                 }
                 ping::IcmpResult::RecvError(error) => {
                     if entries.is_empty() {

@@ -1,6 +1,6 @@
 use std::net::{IpAddr, SocketAddr};
 
-use crate::ping::{sockaddr::SockAddr, IcmpPacket, IcmpResult};
+use crate::ping::{sockaddr::SockAddr, IcmpEchoResponse, IcmpResult};
 
 use super::cmsghdr::*;
 
@@ -87,7 +87,7 @@ impl IcmpSocket {
         Ok(())
     }
 
-    fn send(&mut self, target: IpAddr, length: usize, sequence: u16, timestamp: u64) -> Result<(), crate::ping::Error> {
+    fn send(&mut self, target: IpAddr, length: usize, sequence: u16) -> Result<std::time::SystemTime, crate::ping::Error> {
         let icmp_type = match target {
             IpAddr::V4(_) => 8,
             IpAddr::V6(_) => 128,
@@ -95,6 +95,7 @@ impl IcmpSocket {
         let code = 0;
         let id = sequence;
         self.sendbuffer.resize(8 + length, 0u8);
+        let timestamp = std::time::SystemTime::now();
         crate::ping::construct_icmp_packet(&mut self.sendbuffer, icmp_type, code, id, sequence, timestamp);
         let packet = &mut self.sendbuffer;
 
@@ -129,7 +130,7 @@ impl IcmpSocket {
 
         self.has_sent = true;
 
-        Ok(())
+        Ok(timestamp)
     }
 
     fn recv(&mut self) -> Result<Option<IcmpResult>, crate::ping::Error> {
@@ -247,10 +248,10 @@ impl IcmpSocket {
         let mut ttl: Option<u32> = None;
 
         if self.wsarecvmsg.is_some() {
-            // let cmsghdr: *const WinSock::CMSGHDR = self.control_buffer.as_ptr() as *const WinSock::CMSGHDR;
             let mut cmsg = cmsg_firsthdr(&self.wsamsg);
             while !cmsg.is_null() {
                 let cmsg_type = unsafe { (*cmsg).cmsg_type };
+                const SO_TIMESTAMP: i32 = WinSock::SO_TIMESTAMP as i32;
                 match cmsg_type {
                     WinSock::IP_TTL => {
                         ttl = Some(unsafe { *(cmsg_data(cmsg) as *const u32) });
@@ -261,6 +262,10 @@ impl IcmpSocket {
                         );
                         ttl = Some(unsafe { *(cmsg_data(cmsg) as *const u32) });
                     }
+                    SO_TIMESTAMP => {
+                        // SIO_TIMESTAMPING is not supported with raw sockets
+                        unreachable!();
+                    }
                     _ => unreachable!("Unexpected cmsg_type: {}", cmsg_type),
                 }
 
@@ -269,10 +274,11 @@ impl IcmpSocket {
             // println!("cmsghdr.first() = {:p}", cmsghdr.first());
         }
 
-        Ok(IcmpResult::IcmpPacket(IcmpPacket {
+        Ok(IcmpResult::IcmpPacket(IcmpEchoResponse {
             addr: sa,
             message: self.complete_recv_from(sa.ip(), bytes_received as usize).unwrap(),
-            time: std::time::Instant::now(),
+            timestamp: std::time::SystemTime::now(),
+            socket_timestamp: None,
             recvttl: ttl,
         }))
     }
@@ -324,10 +330,10 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
         Ok(())
     }
 
-    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16, timestamp: u64) -> Result<(), crate::ping::Error> {
+    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16) -> Result<std::time::SystemTime, crate::ping::Error> {
         match target {
-            IpAddr::V4(_) => self.get_socket4()?.send(target, length, sequence, timestamp),
-            IpAddr::V6(_) => self.get_socket6()?.send(target, length, sequence, timestamp),
+            IpAddr::V4(_) => self.get_socket4()?.send(target, length, sequence),
+            IpAddr::V6(_) => self.get_socket6()?.send(target, length, sequence),
         }
     }
 

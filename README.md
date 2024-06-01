@@ -38,33 +38,39 @@ Options:
 
 ## Differences to classic ping
 
-- Continues sends echo requests without blocking while waiting for responses or timeout
-- Allows sending at very high packet rates (thousands of packets per second, use with caution)
-- Displays sent packets and updates display of received packets asynchronously
-- Multiple display modes (`--display` option):
+  - Continues sends echo requests without blocking while waiting for responses or timeout
+  - Allows sending at very high packet rates (thousands of packets per second, use with caution)
+  - Displays sent packets and updates display of received packets asynchronously
+  - Multiple display modes (`--display` option):
     - Classic mode (default): similar to classic ping (but with async update)
     - Char mode: displays a character for each probe, updated on reception or timeout
     - Debug: displays all internal data
-- No need for root/administrator privileges
+  - No need for root/administrator privileges
 
 ## Features
 
-- IPv4 and IPv6 support
-- Configurable packet rate, length, & TTL
-- Supports Windows and Linux, with multiple APIs (`--api=...`):
+  - IPv4 and IPv6 support
+  - Configurable packet rate, length, & TTL
+  - Supports Windows and Linux, with multiple APIs (`--api=...`):
     - Windows: IP Helper API (`iphelper`, default) and raw ICMP sockets (`icmp-socket`)
     - Linux: ICMP sockets (`icmp-socket`)
-- IP_RECVERR support on Linux (for detailed error messages)
-- Packet loss statistics (like classic ping)
-- Show latency statistics (min, max, avg)
-- Ping multiple targets
+  - IP_RECVERR support on Linux (for detailed error messages)
+  - Packet loss statistics (like classic ping)
+  - Show latency statistics (min, max, avg)
+  - Ping multiple targets
+  - OS timestamping (SO_TIMESTAMP) on Linux
 
 ## Missing features & ideas
 
-- OS timestamping (SO_TIMESTAMP)
-- Latency graph
-- Support more than 64 outstanding packets on Windows (currently limited by WaitForMultipleObjects)
-- Show receive TTL
-- Horizontal scrolling display
-- IPv4 route recording
-- IPv4 timestamp
+  - Latency graph
+  - Support more than 64 outstanding packets on Windows (currently limited by WaitForMultipleObjects)
+  - Show receive TTL
+  - Horizontal scrolling display
+  - IPv4 route recording
+  - IPv4 timestamp
+
+## Limitations
+
+  - OS timestamping is not supported on Windows. Latency is measured entirely in user space.
+    - SO_TIMESTAMP is not supported
+    - SIO_TIMESTAMPING is not supported with SOCK_RAW/IPPROTO_ICMP sockets

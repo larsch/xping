@@ -33,7 +33,7 @@ struct PacketInfo {
     /// Buffer for reply data.
     reply_buffer: Vec<u8>,
     /// Timestamp from request.
-    timestamp: u64,
+    timestamp: std::time::SystemTime,
     /// Target IP
     target: std::net::IpAddr,
 }
@@ -101,7 +101,7 @@ impl IpHelperHandle {
         Ok(())
     }
 
-    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16, timestamp: u64) -> Result<(), Error> {
+    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16) -> Result<std::time::SystemTime, Error> {
         let event_handle = unsafe { windows::Win32::System::Threading::CreateEventW(None, true, false, None) }?;
 
         let ip_options = IpHelper::IP_OPTION_INFORMATION32 {
@@ -119,6 +119,7 @@ impl IpHelperHandle {
                 let destinationaddress = unsafe { destinationaddress.S_un.S_addr };
 
                 self.send_buffer.resize(length, 0);
+                let timestamp = std::time::SystemTime::now();
                 super::super::construct_icmp_payload(self.send_buffer.as_mut(), timestamp);
 
                 let mut packet_info = PacketInfo {
@@ -159,6 +160,7 @@ impl IpHelperHandle {
                 let destinationaddress = &sockaddr.sin6 as *const _;
 
                 self.send_buffer.resize(length, 0);
+                let timestamp = std::time::SystemTime::now();
                 super::super::construct_icmp_payload(self.send_buffer.as_mut(), timestamp);
 
                 let mut packet_info = PacketInfo {
@@ -191,9 +193,10 @@ impl IpHelperHandle {
         if send_result == 0 {
             let last_error = unsafe { windows::Win32::Foundation::GetLastError() };
             if last_error == ERROR_IO_PENDING {
+                let ts = packet_info.timestamp;
                 self.event_handles.push(event_handle);
                 self.packets.push(packet_info);
-                Ok(())
+                Ok(ts)
             } else {
                 unsafe { CloseHandle(event_handle) }?;
                 Err(std::io::Error::last_os_error())?
@@ -203,7 +206,7 @@ impl IpHelperHandle {
         }
     }
 
-    fn complete_recv(&mut self, index: usize) -> Result<crate::ping::IcmpResult, Error> {
+    fn complete_recv(&mut self, index: usize, rx_timestamp: std::time::SystemTime) -> Result<crate::ping::IcmpResult, Error> {
         let event_handle = self.event_handles.remove(index);
         unsafe { CloseHandle(event_handle)? };
 
@@ -225,13 +228,19 @@ impl IpHelperHandle {
                         }
                     }
                     1 => {
+                        // ICMP_ECHO_REPLY32 contains the round-trip-time
+                        // measured by the operating system, but it only has a
+                        // resolution of milliseconds, so we don't provide it to
+                        // the user.
                         let echo_reply: &ICMP_ECHO_REPLY32 = &unsafe { *(packet_info.reply_buffer.as_ptr() as *const ICMP_ECHO_REPLY32) };
+
                         let _packet = unsafe { std::slice::from_raw_parts(echo_reply.Data as *const u8, echo_reply.DataSize as usize) };
                         if echo_reply.Status == IpHelper::IP_SUCCESS {
-                            Ok(crate::ping::IcmpResult::IcmpPacket(crate::ping::IcmpPacket {
+                            Ok(crate::ping::IcmpResult::IcmpPacket(crate::ping::IcmpEchoResponse {
                                 addr: std::net::SocketAddr::V4(SocketAddrV4::new(u32::from_be(echo_reply.Address).into(), 0)),
-                                message: icmp_messager_from_icmp_echo_reply32(echo_reply, &packet_info),
-                                time: std::time::Instant::now(),
+                                message: icmp_message_from_icmp_echo_reply32(echo_reply, &packet_info),
+                                timestamp: rx_timestamp,
+                                socket_timestamp: None, // Available in ICMP_ECHO_REPLY32, but precision is too low
                                 recvttl: Some(echo_reply.Options.Ttl as u32),
                             }))
                         } else {
@@ -241,9 +250,9 @@ impl IpHelperHandle {
                                 addr: Some(std::net::SocketAddr::V4(SocketAddrV4::new(echo_reply.Address.into(), 0))),
                                 original_message: None, // FIXME
                                 offender: Some(std::net::SocketAddr::V4(SocketAddrV4::new(echo_reply.Address.into(), 0))),
-                                icmp_type,                       // FIXME
-                                icmp_code,                       // FIXME
-                                time: std::time::Instant::now(), // FIXME
+                                icmp_type,          // FIXME
+                                icmp_code,          // FIXME
+                                time: rx_timestamp, // FIXME
                             }))
                         }
                     }
@@ -270,16 +279,17 @@ impl IpHelperHandle {
                             &unsafe { *(packet_info.reply_buffer.as_ptr() as *const IpHelper::ICMPV6_ECHO_REPLY_LH) };
 
                         match echo_reply.Status {
-                            IpHelper::IP_SUCCESS => Ok(crate::ping::IcmpResult::IcmpPacket(crate::ping::IcmpPacket {
+                            IpHelper::IP_SUCCESS => Ok(crate::ping::IcmpResult::IcmpPacket(crate::ping::IcmpEchoResponse {
                                 addr: std::net::SocketAddr::V6(SocketAddrV6::from(Ipv6AddressEx(echo_reply.Address))),
                                 message: crate::ping::IcmpMessage {
-                                    icmp_type: crate::ping::IcmpType::EchoReply(packet_info.timestamp),
+                                    icmp_type: crate::ping::IcmpType::EchoReply(0),
                                     id: 0,
                                     seq: packet_info.sequence,
                                     timestamp: Some(packet_info.timestamp),
                                 },
-                                time: std::time::Instant::now(),
-                                recvttl: None, // Unavailable
+                                timestamp: rx_timestamp,
+                                socket_timestamp: None, // Unavailable
+                                recvttl: None,          // Unavailable
                             })),
                             _ => {
                                 let (icmp_type, icmp_code) = map_status(echo_reply.Status);
@@ -288,9 +298,9 @@ impl IpHelperHandle {
                                     addr: Some(std::net::SocketAddr::V6(SocketAddrV6::from(Ipv6AddressEx(echo_reply.Address)))),
                                     original_message: None, // FIXME
                                     offender: Some(std::net::SocketAddr::V6(SocketAddrV6::from(Ipv6AddressEx(echo_reply.Address)))),
-                                    icmp_type,                       // FIXME
-                                    icmp_code,                       // FIXME
-                                    time: std::time::Instant::now(), // FIXME
+                                    icmp_type,          // FIXME
+                                    icmp_code,          // FIXME
+                                    time: rx_timestamp, // FIXME
                                 }))
                             }
                         }
@@ -328,7 +338,7 @@ fn map_status(status: u32) -> (Option<u8>, Option<u8>) {
     }
 }
 
-fn icmp_messager_from_icmp_echo_reply32(echo_reply: &ICMP_ECHO_REPLY32, packet_info: &PacketInfo) -> IcmpMessage {
+fn icmp_message_from_icmp_echo_reply32(echo_reply: &ICMP_ECHO_REPLY32, packet_info: &PacketInfo) -> IcmpMessage {
     let data = unsafe { std::slice::from_raw_parts(echo_reply.Data as *const u8, echo_reply.DataSize as usize) };
     let _options =
         unsafe { std::slice::from_raw_parts(echo_reply.Options.OptionsData as *const u8, echo_reply.Options.OptionsSize as usize) };
@@ -343,7 +353,7 @@ fn icmp_messager_from_icmp_echo_reply32(echo_reply: &ICMP_ECHO_REPLY32, packet_i
         },
         id: 0,
         seq: packet_info.sequence,
-        timestamp: Some(u64::from_be_bytes(data[0..8].try_into().unwrap())),
+        timestamp: crate::ping::timestamp_from_payload(data),
     }
 }
 
@@ -370,10 +380,10 @@ impl crate::ping::IcmpApi for IpHelperApi {
         Ok(())
     }
 
-    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16, timestamp: u64) -> Result<(), Error> {
+    fn send(&mut self, target: std::net::IpAddr, length: usize, sequence: u16) -> Result<std::time::SystemTime, Error> {
         match target {
-            std::net::IpAddr::V4(_) => self.ipv4_handle()?.send(target, length, sequence, timestamp),
-            std::net::IpAddr::V6(_) => self.ipv6_handle()?.send(target, length, sequence, timestamp),
+            std::net::IpAddr::V4(_) => self.ipv4_handle()?.send(target, length, sequence),
+            std::net::IpAddr::V6(_) => self.ipv6_handle()?.send(target, length, sequence),
         }
     }
 
@@ -405,6 +415,8 @@ impl crate::ping::IcmpApi for IpHelperApi {
             windows::Win32::System::Threading::WaitForMultipleObjects(handles, false, timeout.as_millis() as u32)
         };
 
+        let rx_timestamp = std::time::SystemTime::now();
+
         match wait_result {
             WAIT_TIMEOUT => Ok(crate::ping::IcmpResult::Timeout),
             WAIT_FAILED => Err(std::io::Error::last_os_error())?,
@@ -412,9 +424,12 @@ impl crate::ping::IcmpApi for IpHelperApi {
                 let index = (n - WAIT_OBJECT_0.0) as usize;
 
                 if index < ipv4_handle_count {
-                    self.handle4.as_mut().unwrap().complete_recv(index)
+                    self.handle4.as_mut().unwrap().complete_recv(index, rx_timestamp)
                 } else {
-                    self.handle6.as_mut().unwrap().complete_recv(index - ipv4_handle_count)
+                    self.handle6
+                        .as_mut()
+                        .unwrap()
+                        .complete_recv(index - ipv4_handle_count, rx_timestamp)
                 }
             }
         }
