@@ -44,11 +44,11 @@ pub enum Api {
 #[command(version, about, long_about = "Ping utility", author, name = "xping")]
 pub struct Args {
     /// Number of packets per second
-    #[arg(short, long)]
+    #[arg(short, long, conflicts_with("interval"))]
     pub rate: Option<u32>,
 
     /// Packet interval in milliseconds
-    #[arg(short, long, default_value_t = 1000)]
+    #[arg(short, long, default_value_t = 1000, conflicts_with("rate"))]
     pub interval: u64,
 
     /// Number of attempts (default infinite)
