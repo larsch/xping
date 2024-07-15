@@ -27,6 +27,6 @@ jobs:
     - name: Run fmt
       run: cargo fmt -- --check
     - name: Run IPv4 ping
-      run: cargo run --bin mping -- 127.0.0.1 -c 4 --rate 20
+      run: cargo run --bin xping -- 127.0.0.1 -c 4 --rate 20
     - name: Run IPv6 ping
-      run: cargo run --bin mping -- ::1 -c 4 --rate 20
+      run: cargo run --bin xping -- ::1 -c 4 --rate 20
