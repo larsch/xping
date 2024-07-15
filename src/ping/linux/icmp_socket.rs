@@ -232,7 +232,7 @@ impl IcmpSocket {
         if recvmsg_flags & libc::MSG_ERRQUEUE == 0 {
             let packet = &buf[..received_bytes.max(0)];
             let addr = addr.try_into().unwrap();
-            Ok(crate::ping::IcmpResult::IcmpPacket(crate::ping::IcmpEchoResponse {
+            Ok(crate::ping::IcmpResult::EchoReply(crate::ping::EchoReply {
                 addr,
                 message: match addr {
                     SocketAddr::V4(_) => crate::ping::parse_icmp_packet(packet).unwrap(),

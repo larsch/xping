@@ -24,6 +24,8 @@ type Error = anyhow::Error;
 #[cfg(not(feature = "anyhow"))]
 type Error = std::io::Error;
 
+/// The ICMP API trait. This trait is implemented by the OS-specific ICMP API
+/// implementations.
 pub trait IcmpApi {
     fn new() -> Result<Self, Error>
     where
@@ -40,7 +42,6 @@ pub trait IcmpApi {
     /// * `target` - The target IP address
     /// * `length` - The length of the ICMP payload
     /// * `seq` - The sequence number of the packet
-    /// * `timestamp` - The timestamp to insert into the ICMP payload
     ///
     /// # Errors
     ///
@@ -54,7 +55,8 @@ pub trait IcmpApi {
 
     /// Wait for the next ICMP packet, error, or timeout. Returns the received
     /// packet or error. Doesn't return an Error on expected ICMP errors (such
-    /// as host unreachable).
+    /// as host unreachable). This function will block until a packet is
+    /// received, an error occurs, or the timeout is reached.
     ///
     /// # Errors
     ///
@@ -125,7 +127,7 @@ pub struct IcmpMessage {
 
 #[derive(Debug)]
 pub enum IcmpResult {
-    IcmpPacket(IcmpEchoResponse),
+    EchoReply(EchoReply),
     #[allow(dead_code)]
     RecvError(RecvError),
     Timeout,
@@ -135,7 +137,7 @@ pub enum IcmpResult {
 
 // A received ICMP packet
 #[derive(Debug)]
-pub struct IcmpEchoResponse {
+pub struct EchoReply {
     // The source address
     pub addr: SocketAddr,
     // The receive ICMP message
@@ -415,10 +417,10 @@ mod tests {
         let tx_timestamp = pinger.send(target, 64, sequence).unwrap();
         let packet = pinger.recv(std::time::Duration::from_secs(1)).unwrap();
         // must always be a IcmpPacket
-        assert!(matches!(packet, IcmpResult::IcmpPacket(_)));
+        assert!(matches!(packet, IcmpResult::EchoReply(_)));
         // must be an echo reply
         let packet = match packet {
-            IcmpResult::IcmpPacket(packet) => packet,
+            IcmpResult::EchoReply(packet) => packet,
             _ => unreachable!(),
         };
         assert!(matches!(packet.message.icmp_type, IcmpType::EchoReply(_)));
@@ -459,10 +461,10 @@ mod tests {
         let timestamp = pinger.send(target, 64, sequence).unwrap();
         let packet = pinger.recv(std::time::Duration::from_secs(1)).unwrap();
         // must always be a IcmpPacket
-        assert!(matches!(packet, IcmpResult::IcmpPacket(_)));
+        assert!(matches!(packet, IcmpResult::EchoReply(_)));
         // must be an echo reply
         let packet = match packet {
-            IcmpResult::IcmpPacket(packet) => packet,
+            IcmpResult::EchoReply(packet) => packet,
             _ => unreachable!(),
         };
         assert!(
@@ -504,9 +506,9 @@ mod tests {
         let sequence = 0xde42u16;
         let timestamp = pinger.send(*addr, 64, sequence)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
-        assert!(matches!(packet, IcmpResult::IcmpPacket(_)));
+        assert!(matches!(packet, IcmpResult::EchoReply(_)));
         let packet = match packet {
-            IcmpResult::IcmpPacket(packet) => packet,
+            IcmpResult::EchoReply(packet) => packet,
             _ => unreachable!(),
         };
         assert!(packet.recvttl.is_some());
@@ -530,9 +532,9 @@ mod tests {
         let sequence = 0xde42u16;
         let timestamp = pinger.send(target, 64, sequence)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
-        assert!(matches!(packet, IcmpResult::IcmpPacket(_)));
+        assert!(matches!(packet, IcmpResult::EchoReply(_)));
         let packet = match packet {
-            IcmpResult::IcmpPacket(packet) => packet,
+            IcmpResult::EchoReply(packet) => packet,
             _ => unreachable!(),
         };
         assert!(packet.recvttl.is_some());
@@ -648,7 +650,7 @@ mod tests {
         while !remaining.is_empty() {
             let packet = pinger.recv(std::time::Duration::from_secs(1))?;
             let packet = match packet {
-                IcmpResult::IcmpPacket(packet) => packet,
+                IcmpResult::EchoReply(packet) => packet,
                 _ => unreachable!(),
             };
             assert!(remaining.remove(&packet.addr.ip()));

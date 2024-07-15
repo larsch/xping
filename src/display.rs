@@ -4,7 +4,7 @@ use std::{collections::HashMap, io::Write, net::IpAddr};
 
 use crossterm::QueueableCommand;
 
-use crate::ping::{IcmpEchoResponse, RecvError};
+use crate::ping::{EchoReply, RecvError};
 
 pub trait DisplayModeTrait {
     fn new(columns: u16, rows: u16) -> Self
@@ -16,7 +16,7 @@ pub trait DisplayModeTrait {
         &mut self,
         index: usize,
         sequence: u64,
-        response: &IcmpEchoResponse,
+        response: &EchoReply,
         round_trip_time: std::time::Duration,
     ) -> std::io::Result<()>;
     fn display_error(&mut self, index: usize, sequence: u64, error: &RecvError) -> std::io::Result<()>;
@@ -64,7 +64,7 @@ impl DisplayModeTrait for ClassicDisplayMode {
         &mut self,
         index: usize,
         sequence: u64,
-        packet: &IcmpEchoResponse,
+        packet: &EchoReply,
         round_trip_time: std::time::Duration,
     ) -> std::io::Result<()> {
         match &packet.message.icmp_type {
@@ -126,7 +126,7 @@ impl DisplayModeTrait for DumbDisplayMode {
         &mut self,
         _index: usize,
         _sequence: u64,
-        response: &IcmpEchoResponse,
+        response: &EchoReply,
         _round_trip_time: std::time::Duration,
     ) -> std::io::Result<()> {
         print!("received response for sequence {} in {:?}", _sequence, _round_trip_time);
@@ -205,7 +205,7 @@ impl DisplayModeTrait for CharDisplayMode {
         &mut self,
         _index: usize,
         sequence: u64,
-        response: &IcmpEchoResponse,
+        response: &EchoReply,
         _round_trip_time: std::time::Duration,
     ) -> std::io::Result<()> {
         let char = match response.message.icmp_type {
@@ -297,7 +297,7 @@ impl DisplayModeTrait for CharGraphDisplayMode {
         &mut self,
         _index: usize,
         sequence: u64,
-        _response: &IcmpEchoResponse,
+        _response: &EchoReply,
         round_trip_time: std::time::Duration,
     ) -> std::io::Result<()> {
         let n = (round_trip_time.as_millis() as f64 + 1.0).ln().max(0.0) / 7.0 * (GRAPH_CHARS.len() - 1) as f64;
@@ -355,7 +355,7 @@ impl DisplayModeTrait for DebugDisplayMode {
         &mut self,
         _index: usize,
         sequence: u64,
-        response: &IcmpEchoResponse,
+        response: &EchoReply,
         round_trip_time: std::time::Duration,
     ) -> std::io::Result<()> {
         Ok(println!("seq={:?}, response={:?}, rtt={:?}", sequence, response, round_trip_time))
@@ -403,7 +403,7 @@ impl DisplayModeTrait for NoneDisplayMode {
         &mut self,
         _index: usize,
         _sequence: u64,
-        _response: &IcmpEchoResponse,
+        _response: &EchoReply,
         _round_trip_time: std::time::Duration,
     ) -> std::io::Result<()> {
         Ok(())
@@ -531,7 +531,7 @@ impl DisplayModeTrait for HorizontalPlotDisplayMode {
         &mut self,
         _index: usize,
         sequence: u64,
-        response: &IcmpEchoResponse,
+        response: &EchoReply,
         round_trip_time: std::time::Duration,
     ) -> std::io::Result<()> {
         let row = _index;
@@ -594,7 +594,7 @@ impl DisplayModeTrait for InfluxLineProtocolDisplayMode {
         &mut self,
         index: usize,
         sequence: u64,
-        response: &IcmpEchoResponse,
+        response: &EchoReply,
         round_trip_time: std::time::Duration,
     ) -> std::io::Result<()> {
         let influx_timestamp = std::time::SystemTime::now()

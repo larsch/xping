@@ -236,7 +236,7 @@ impl IpHelperHandle {
 
                         let _packet = unsafe { std::slice::from_raw_parts(echo_reply.Data as *const u8, echo_reply.DataSize as usize) };
                         if echo_reply.Status == IpHelper::IP_SUCCESS {
-                            Ok(crate::ping::IcmpResult::IcmpPacket(crate::ping::IcmpEchoResponse {
+                            Ok(crate::ping::IcmpResult::EchoReply(crate::ping::EchoReply {
                                 addr: std::net::SocketAddr::V4(SocketAddrV4::new(u32::from_be(echo_reply.Address).into(), 0)),
                                 message: icmp_message_from_icmp_echo_reply32(echo_reply, &packet_info),
                                 timestamp: rx_timestamp,
@@ -279,7 +279,7 @@ impl IpHelperHandle {
                             &unsafe { *(packet_info.reply_buffer.as_ptr() as *const IpHelper::ICMPV6_ECHO_REPLY_LH) };
 
                         match echo_reply.Status {
-                            IpHelper::IP_SUCCESS => Ok(crate::ping::IcmpResult::IcmpPacket(crate::ping::IcmpEchoResponse {
+                            IpHelper::IP_SUCCESS => Ok(crate::ping::IcmpResult::EchoReply(crate::ping::EchoReply {
                                 addr: std::net::SocketAddr::V6(SocketAddrV6::from(Ipv6AddressEx(echo_reply.Address))),
                                 message: crate::ping::IcmpMessage {
                                     icmp_type: crate::ping::IcmpType::EchoReply(0),

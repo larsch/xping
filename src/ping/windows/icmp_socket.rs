@@ -1,6 +1,6 @@
 use std::net::{IpAddr, SocketAddr};
 
-use crate::ping::{sockaddr::SockAddr, IcmpEchoResponse, IcmpResult};
+use crate::ping::{sockaddr::SockAddr, EchoReply, IcmpResult};
 
 use super::cmsghdr::*;
 
@@ -274,7 +274,7 @@ impl IcmpSocket {
             // println!("cmsghdr.first() = {:p}", cmsghdr.first());
         }
 
-        Ok(IcmpResult::IcmpPacket(IcmpEchoResponse {
+        Ok(IcmpResult::EchoReply(EchoReply {
             addr: sa,
             message: self.complete_recv_from(sa.ip(), bytes_received as usize).unwrap(),
             timestamp: std::time::SystemTime::now(),

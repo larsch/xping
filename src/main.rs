@@ -59,22 +59,27 @@ impl TargetInfo {
     }
 }
 
-struct Entry {
+/// Information about a probe that has been sent
+struct ProbeInfo {
+    /// The sequence number of the probe
     sequence: u64,
+    /// The time when the probe will time out
     timeout: std::time::Instant,
+    /// The time when the probe was sent
     tx_timestamp: std::time::SystemTime,
-    received: bool,
+    /// Whether the response has been received
+    response_received: bool,
 }
 
-impl Entry {
+impl ProbeInfo {
     /// Calculate the round trip time based on the tx_timestamp and the rx_timestamp in the echo response
-    fn os_timestamp_rtt(&self, echo_response: &ping::IcmpEchoResponse) -> Option<std::time::Duration> {
+    fn os_timestamp_rtt(&self, echo_response: &ping::EchoReply) -> Option<std::time::Duration> {
         echo_response
             .socket_timestamp
             .map(|rx_timestamp| rx_timestamp.duration_since(self.tx_timestamp).unwrap())
     }
 
-    fn local_rtt(&self, echo_response: &ping::IcmpEchoResponse) -> Option<std::time::Duration> {
+    fn local_rtt(&self, echo_response: &ping::EchoReply) -> Option<std::time::Duration> {
         echo_response
             .message
             .timestamp
@@ -84,8 +89,71 @@ impl Entry {
     /// Get the round-trip-time of the packet. This function will first try to
     /// calculate the RTT based on the OS timestamps and if that fails, it will
     /// try to calculate the RTT based on the local timestamps.
-    fn rtt(&self, echo_response: &ping::IcmpEchoResponse) -> Option<std::time::Duration> {
+    fn rtt(&self, echo_response: &ping::EchoReply) -> Option<std::time::Duration> {
         self.os_timestamp_rtt(echo_response).or_else(|| self.local_rtt(echo_response))
+    }
+}
+
+struct ProbeTable {
+    table: VecDeque<ProbeInfo>,
+}
+
+impl ProbeTable {
+    fn new() -> Self {
+        Self { table: VecDeque::new() }
+    }
+
+    fn cleanup(&mut self) {
+        // Remove all entries that have been received
+        while !self.table.is_empty() && self.table.front().unwrap().response_received {
+            self.table.pop_front();
+        }
+    }
+
+    fn get(&mut self, sequence: u64) -> Option<&ProbeInfo> {
+        if self.table.is_empty() {
+            return None;
+        }
+        let front_sequence = self.table.front().unwrap().sequence;
+        let position = (sequence as usize + 65536 - front_sequence as usize) % 65536;
+        if position < self.table.len() {
+            let probe_info = &mut self.table[position];
+            probe_info.response_received = true;
+            Some(probe_info)
+        } else {
+            None
+        }
+    }
+
+    fn add(&mut self, probe: ProbeInfo) {
+        self.table.push_back(probe);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.table.is_empty()
+    }
+
+    fn clear(&mut self) {
+        self.table.clear();
+    }
+
+    fn pop_timeout(&mut self) -> Option<ProbeInfo> {
+        self.cleanup();
+        if self.table.is_empty() {
+            None
+        } else {
+            let front = self.table.front().unwrap();
+            if front.timeout <= std::time::Instant::now() {
+                Some(self.table.pop_front().unwrap())
+            } else {
+                None
+            }
+        }
+    }
+
+    /// Get the time when the next probe will time out
+    fn next_timeout(&self) -> Option<std::time::Instant> {
+        self.table.front().map(|probe| probe.timeout)
     }
 }
 
@@ -102,7 +170,7 @@ fn lookup_host(host: &str, force_ip: &args::ForceIp) -> Option<IpAddr> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, interrupt_rx) = std::sync::mpsc::channel();
     ctrlc::set_handler(move || {
         tx.send(()).unwrap();
     })
@@ -197,7 +265,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => (78, 25),
     };
 
-    let mut entries = VecDeque::new();
+    // Table of active probes
+    let mut probes = ProbeTable::new();
 
     let mut display_mode: Box<dyn display::DisplayModeTrait> = match args.display {
         args::DisplayMode::Classic => Box::new(display::ClassicDisplayMode::new(columns, rows)),
@@ -221,7 +290,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut address_index_iter = (0..targets.len()).cycle();
     let target_count = targets.len();
 
-    while attempts_left > 0 || !entries.is_empty() {
+    while attempts_left > 0 || !probes.is_empty() {
         if attempts_left > 0 {
             let address_index = address_index_iter.next().unwrap();
             let target = &mut targets[address_index];
@@ -238,11 +307,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             attempts_left -= 1;
 
-            entries.push_back(Entry {
+            probes.add(ProbeInfo {
                 sequence,
                 timeout: std::time::Instant::now() + icmp_timeout,
                 tx_timestamp,
-                received: false,
+                response_received: false,
             });
             sequence += 1;
             next_send += interval;
@@ -250,47 +319,40 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         // Receive loop
         loop {
-            if let Ok(()) = rx.try_recv() {
+            if let Ok(()) = interrupt_rx.try_recv() {
                 if attempts_left > 0 {
+                    // Cancel all remaining probes
                     attempts_left = 0;
                 } else {
-                    entries.clear();
+                    // Exit immediately
+                    probes.clear();
                     break;
                 }
             }
 
-            // Clean up entries that have timed out
-            while !entries.is_empty() {
-                let entry = entries.front().unwrap();
-                if entry.received {
-                    // Remove all entries from front of queue that have been received
-                    entries.pop_front();
-                } else if entry.timeout > std::time::Instant::now() {
-                    // Stop if the next entry has not yet timed out
-                    break;
-                } else {
-                    let index = entry.sequence % target_count as u64;
-                    let display_sequence = entry.sequence / target_count as u64;
-                    display_mode.display_timeout(index as usize, display_sequence)?;
-                    entries.pop_front();
-                }
+            // Check for timeouts
+            while let Some(probe) = probes.pop_timeout() {
+                let index = probe.sequence % target_count as u64;
+                let display_sequence = probe.sequence / target_count as u64;
+                display_mode.display_timeout(index as usize, display_sequence)?;
             }
 
-            if entries.is_empty() && attempts_left == 0 {
+            // End receive loop if no more probes are active
+            if probes.is_empty() && attempts_left == 0 {
                 break;
             }
 
             // Determine how long to wait until the next event
             let wait_until = if attempts_left > 0 {
-                if entries.is_empty() {
-                    next_send // Wait for next send
+                if let Some(timeout) = probes.next_timeout() {
+                    next_send.min(timeout) // Wait for next timeout or next send
                 } else {
-                    next_send.min(entries.front().unwrap().timeout) // Wait for next timeout or next send
+                    next_send // Wait for next send
                 }
-            } else if entries.is_empty() {
-                break; // No more attempts left and no more entries to wait for
+            } else if let Some(timeout) = probes.next_timeout() {
+                timeout // Wait for next timeout
             } else {
-                entries.front().unwrap().timeout // Wait for next timeout
+                break; // No more active probes
             };
 
             let time_left = wait_until - std::time::Instant::now();
@@ -300,58 +362,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let response = ping_protocol.recv(time_left)?;
             match response {
-                ping::IcmpResult::IcmpPacket(packet) => {
+                ping::IcmpResult::EchoReply(packet) => {
                     let target_index = target_indices[&packet.addr.ip()];
                     let target = &mut targets[target_index];
                     target.packets_received += 1;
 
-                    if entries.is_empty() {
+                    if probes.is_empty() {
                         continue;
                     }
 
-                    let front_sequence = entries.front().unwrap().sequence;
-                    let position = (packet.message.seq as usize + 65536 - front_sequence as usize) % 65536;
-                    if position <= entries.len() {
-                        let entry = &entries[position];
-                        let display_sequence = entry.sequence / target_count as u64;
-                        let index = entry.sequence % target_count as u64;
-
-                        let round_trip_time = entry.rtt(&packet).unwrap();
+                    if let Some(probe) = probes.get(packet.message.seq as u64) {
+                        let round_trip_time = probe.rtt(&packet).unwrap();
                         target.add_rtt(round_trip_time);
 
+                        let display_sequence = probe.sequence / target_count as u64;
+                        let index = probe.sequence % target_count as u64;
+
                         display_mode.display_receive(index as usize, display_sequence, &packet, round_trip_time)?;
-                        if position == 0 {
-                            entries.pop_front();
-                        } else {
-                            entries[position].received = true;
-                        }
                     }
-
-                    //     let nanos = rx_timestamp - tx_timestamp;
-                    //     let round_trip_time = std::time::Duration::from_nanos(nanos);
-
-                    // } else {
-                    //     println!("no timestamp found in packet: {:?}", packet);
-                    // }
                 }
                 ping::IcmpResult::RecvError(error) => {
-                    if entries.is_empty() {
+                    if probes.is_empty() {
                         continue;
                     }
                     if let Some(orig_message) = &error.original_message {
-                        let orig_sequence = orig_message.seq;
-                        let front_sequence = entries.front().unwrap().sequence;
-                        let position = (orig_sequence as usize + 65536 - front_sequence as usize) % 65536;
-                        if position <= entries.len() {
-                            let entry = &entries[position];
-                            let display_sequence = entry.sequence / target_count as u64;
-                            let row = entry.sequence % target_count as u64;
-                            display_mode.display_error(row as usize, display_sequence, &error)?;
-                            if position == 0 {
-                                entries.pop_front();
-                            } else {
-                                entries[position].received = true;
-                            }
+                        if let Some(probe) = probes.get(orig_message.seq as u64) {
+                            let display_sequence = probe.sequence / target_count as u64;
+                            let index = probe.sequence % target_count as u64;
+                            display_mode.display_error(index as usize, display_sequence, &error)?;
                         }
                     }
                 }
