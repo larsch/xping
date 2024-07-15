@@ -1,0 +1,2 @@
+[build.env]
+passthrough = ["LD_LIBRARY_PATH=/rust/lib"]
