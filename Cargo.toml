@@ -40,6 +40,10 @@ features = [
     "Win32_Globalization",
 ]
 
+[target.'cfg(unix)'.build-dependencies]
+clap_complete = "4.5.8"
+clap ={ version = "4.5.4", features = ["derive"] }
+
 [features]
 default = ["iphelper"]
 iphelper = []
