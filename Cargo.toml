@@ -9,7 +9,6 @@ authors = ["Lars Christensen <larsch@belunktum.dk>"]
 exclude = ["target/release/update-readme.exe"]
 homepage = "https://github.com/larsch/xping"
 repository = "https://github.com/larsch/xping"
-publish = false
 
 [[bin]]
 name = "xping"
