@@ -1,18 +1,18 @@
 [package]
-name = "ping"
+name = "xping"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
-default-run = "mping"
+default-run = "xping"
 description = "Command line ping, re-imagined."
 authors = ["Lars Christensen <larsch@belunktum.dk>"]
 exclude = ["target/release/update-readme.exe"]
-homepage = "https://github.com/larsch/mping"
-repository = "https://github.com/larsch/mping"
+homepage = "https://github.com/larsch/xping"
+repository = "https://github.com/larsch/xping"
 publish = false
 
 [[bin]]
-name = "mping"
+name = "xping"
 path = "src/main.rs"
 
 [dependencies]

@@ -6,3 +6,4 @@ cargo test
 cargo test -F anyhow
 cargo clippy --release
 cargo clippy --release -F anyhow
+cargo run -- --update-readme 0

@@ -1,4 +1,4 @@
-# mping
+# xping
 
 [![Rust](https://github.com/larsch/mping/actions/workflows/rust.yml/badge.svg)](https://github.com/larsch/mping/actions/workflows/rust.yml)
 
@@ -11,7 +11,7 @@ time to target host, with bells and whistles.
 ```
 Command line ping, re-imagined.
 
-Usage: mping [OPTIONS] <TARGET>...
+Usage: xping [OPTIONS] <TARGET>...
 
 Arguments:
   <TARGET>...  Address or name of target host
@@ -24,7 +24,7 @@ Options:
   -l, --length <LENGTH>      Length of ICMP payload in bytes [default: 64]
   -d, --display <DISPLAY>    Display mode [default: classic] [possible values: classic, char, dumb, char-graph, debug, plot, none, influx]
   -t, --ttl <TTL>            Time to live [default: 64]
-      --api <API>            API to use [default: iphelper] [possible values: icmp-socket, iphelper]
+      --api <API>            [default: icmp-socket] [possible values: icmp-socket]
   -4, --ipv4                 Force using IPv4
   -6, --ipv6                 Force using IPv6
   -a, --all                  Target all resolved addresses

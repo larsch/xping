@@ -41,7 +41,7 @@ pub enum Api {
 }
 
 #[derive(Parser, Debug)]
-#[command(version, about, long_about = "Ping utility", author, name = "mping")]
+#[command(version, about, long_about = "Ping utility", author, name = "xping")]
 pub struct Args {
     /// Number of packets per second
     #[arg(short, long)]
@@ -80,6 +80,7 @@ pub struct Args {
     #[arg(long, default_value = "iphelper")]
     pub api: Api,
 
+    // API to use
     #[cfg(not(windows))]
     #[arg(long, default_value = "icmp-socket")]
     pub api: Api,
