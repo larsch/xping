@@ -638,8 +638,10 @@ mod tests {
     #[cfg(not(feature = "skip-network-tests"))]
     fn test_ping_multiple<T: IcmpApi>() -> Result<(), Box<dyn std::error::Error>> {
         let _lock = TEST_MUTEX.lock().unwrap();
-        let addrs = dns_lookup::lookup_host("google.com")?;
-        let ipv4addrs: Vec<IpAddr> = addrs.iter().filter(|addr| addr.is_ipv4()).cloned().collect();
+        let addrs1 = dns_lookup::lookup_host("google.com")?;
+        let addrs2 = dns_lookup::lookup_host("gmail.com")?;
+        let addrs = addrs1.iter().chain(addrs2.iter());
+        let ipv4addrs: Vec<IpAddr> = addrs.filter(|addr| addr.is_ipv4()).cloned().collect();
         assert!(ipv4addrs.len() > 1);
         let mut pinger = T::new()?;
         let sequence = 0xde42u16;
