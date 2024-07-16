@@ -6,11 +6,20 @@ use crossterm::QueueableCommand;
 
 use crate::ping::{EchoReply, RecvError};
 
+pub mod appendable;
+use appendable::AppendableDisplay;
+
+/// Generic interface for displaying ping results
 pub trait DisplayModeTrait {
     fn new(columns: u16, rows: u16) -> Self
     where
         Self: Sized;
+
+    /// Add a target to the display
+    ///
+    /// Invoked when a new target is added to the ping command during initialization.
     fn add_target(&mut self, index: usize, target: &IpAddr, hostname: &str) -> std::io::Result<()>;
+
     fn display_send(&mut self, index: usize, target: &IpAddr, length: usize, sequence: u64) -> std::io::Result<()>;
     fn display_receive(
         &mut self,
@@ -24,40 +33,61 @@ pub trait DisplayModeTrait {
     fn close(&mut self) -> std::io::Result<()>;
 }
 
-pub struct ClassicDisplayMode {
+pub trait BucketDisplay {
+    fn new(columns: u16, rows: u16) -> Self
+    where
+        Self: Sized;
+
+    fn add_target(&mut self, index: usize, target: &IpAddr, hostname: &str) -> std::io::Result<()>;
+    fn begin(&mut self, target: usize, index: usize, count: usize);
+    fn complete(&mut self, target: usize, index: usize, sent: usize, received: usize, lost: usize, rtt: std::time::Duration);
+}
+
+pub struct ClassicBucketDisplay {
     position: u64,
-    widths: HashMap<u64, usize>,
+    widths: HashMap<usize, usize>,
     stdout: std::io::Stdout,
 }
 
-impl ClassicDisplayMode {
-    fn display_outcome(&mut self, sequence: u64, outcome: &str) -> std::io::Result<()> {
-        let relative_sequence = self.position - sequence;
-        let width = self.widths.remove(&sequence).unwrap();
-        self.stdout.queue(crossterm::cursor::SavePosition)?;
-        self.stdout.queue(crossterm::cursor::MoveUp(relative_sequence as u16))?;
-        self.stdout.queue(crossterm::cursor::MoveToColumn(width as u16 + 1))?;
-        print!("{}", outcome);
-        self.stdout.queue(crossterm::cursor::RestorePosition)?;
-        self.stdout.flush()
-    }
-}
-
-impl DisplayModeTrait for ClassicDisplayMode {
-    fn new(_columns: u16, _rows: u16) -> Self {
-        ClassicDisplayMode {
+impl BucketDisplay for ClassicBucketDisplay {
+    fn new(columns: u16, rows: u16) -> Self
+    where
+        Self: Sized,
+    {
+        ClassicBucketDisplay {
             position: 0,
             widths: HashMap::new(),
             stdout: std::io::stdout(),
         }
     }
 
+    fn add_target(&mut self, index: usize, target: &IpAddr, hostname: &str) -> std::io::Result<()> {
+        todo!()
+    }
+
+    fn begin(&mut self, target: usize, index: usize, count: usize) {
+        todo!()
+    }
+
+    fn complete(&mut self, target: usize, index: usize, sent: usize, received: usize, lost: usize, rtt: std::time::Duration) {
+        todo!()
+    }
+}
+
+pub struct ClassicDisplayMode {
+    display: AppendableDisplay,
+}
+
+impl DisplayModeTrait for ClassicDisplayMode {
+    fn new(_columns: u16, _rows: u16) -> Self {
+        ClassicDisplayMode {
+            display: AppendableDisplay::new(_rows as usize),
+        }
+    }
+
     fn display_send(&mut self, _index: usize, target: &IpAddr, length: usize, sequence: u64) -> std::io::Result<()> {
         let output = format!("{} bytes for {}: icmp_seq={}", length, target, sequence);
-        self.widths.insert(sequence, output.len());
-        println!("{}", output);
-        self.position = sequence + 1;
-        Ok(())
+        self.display.create(&output)
     }
 
     fn display_receive(
@@ -67,30 +97,27 @@ impl DisplayModeTrait for ClassicDisplayMode {
         packet: &EchoReply,
         round_trip_time: std::time::Duration,
     ) -> std::io::Result<()> {
-        match &packet.message.icmp_type {
-            crate::ping::IcmpType::EchoReply(_) => self.display_outcome(sequence, &format!("time={:?}", round_trip_time)),
-            crate::ping::IcmpType::IPv4DestinationUnreachable(unreach) => self.display_outcome(
-                sequence,
-                &format!(
-                    "Destination unreachable from {:?}, {}",
-                    packet.addr,
-                    crate::ping::ipv4unreach_to_string(unreach)
-                ),
+        let row = sequence as usize;
+        let output = match &packet.message.icmp_type {
+            crate::ping::IcmpType::EchoReply(_) => format!("time={:?}", round_trip_time),
+            crate::ping::IcmpType::IPv4DestinationUnreachable(unreach) => format!(
+                "Destination unreachable from {:?}, {}",
+                packet.addr,
+                crate::ping::ipv4unreach_to_string(unreach)
             ),
-            crate::ping::IcmpType::IPv6DestinationUnreachable(unreach) => self.display_outcome(
-                sequence,
-                &format!(
-                    "Destination unreachable from {:?}, {}",
-                    packet.addr,
-                    crate::ping::ipv6unreach_to_string(unreach)
-                ),
+            crate::ping::IcmpType::IPv6DestinationUnreachable(unreach) => format!(
+                "Destination unreachable from {:?}, {}",
+                packet.addr,
+                crate::ping::ipv6unreach_to_string(unreach)
             ),
-            crate::ping::IcmpType::TimeExceeded => self.display_outcome(sequence, &format!("TTL expired from {:?}", packet.addr)),
-        }
+            crate::ping::IcmpType::TimeExceeded => format!("TTL expired from {:?}", packet.addr),
+        };
+        self.display.append(row, &output)
     }
 
     fn display_timeout(&mut self, _index: usize, sequence: u64) -> std::io::Result<()> {
-        self.display_outcome(sequence, "timeout")
+        let row = sequence as usize;
+        self.display.append(row, "timeout")
     }
 
     fn close(&mut self) -> std::io::Result<()> {
@@ -98,17 +125,12 @@ impl DisplayModeTrait for ClassicDisplayMode {
     }
 
     fn display_error(&mut self, _index: usize, sequence: u64, error: &RecvError) -> std::io::Result<()> {
-        self.display_outcome(sequence, &format!("{:?}", error))
+        let row = sequence as usize;
+        self.display.append(row, &format!("{:?}", error))
     }
 
     fn add_target(&mut self, _index: usize, _target: &IpAddr, _hostname: &str) -> std::io::Result<()> {
         Ok(())
-    }
-}
-
-impl Drop for ClassicDisplayMode {
-    fn drop(&mut self) {
-        self.stdout.queue(crossterm::cursor::Show).unwrap();
     }
 }
 

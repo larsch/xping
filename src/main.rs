@@ -2,12 +2,14 @@
 #![allow(unused_variables)]
 
 mod args;
+mod buckets;
 mod display;
 mod duration;
 mod ping;
 mod summary;
 
 use clap::Parser;
+use xping::PingEventHandler;
 
 use std::{
     collections::{HashMap, VecDeque},
@@ -18,6 +20,8 @@ use std::{
 use crate::display::DisplayModeTrait;
 
 use crate::ping::IcmpApi;
+
+use buckets::StatsTable;
 
 #[cfg(debug_assertions)]
 mod update_readme;
@@ -244,6 +248,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => std::time::Duration::from_millis(args.interval),
     } / targets.len() as u32;
 
+    let sample_size = match args.report_interval {
+        Some(report_interval) => 1.max((report_interval * args.rate.unwrap_or(1) as f64).ceil() as usize),
+        None => args.sample_size,
+    };
+
     let target_indices: HashMap<IpAddr, usize> = targets.iter().enumerate().map(|(i, t)| (t.address, i)).collect();
 
     let mut next_send = std::time::Instant::now();
@@ -290,6 +299,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut address_index_iter = (0..targets.len()).cycle();
     let target_count = targets.len();
 
+    let mut stats = vec![StatsTable::new(sample_size); targets.len()];
+
     while attempts_left > 0 || !probes.is_empty() {
         if attempts_left > 0 {
             let address_index = address_index_iter.next().unwrap();
@@ -300,6 +311,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             target.packets_transmitted += 1;
 
             let display_sequence = sequence / target_count as u64;
+
+            stats[address_index].on_sent(display_sequence);
 
             let index = sequence % target_count as u64;
 
@@ -335,6 +348,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let index = probe.sequence % target_count as u64;
                 let display_sequence = probe.sequence / target_count as u64;
                 display_mode.display_timeout(index as usize, display_sequence)?;
+
+                let bucket_index = display_sequence / sample_size as u64;
+                stats[index as usize].on_timeout(display_sequence);
+            }
+
+            // Check for completed buckets
+            for (index, stats) in stats.iter_mut().enumerate() {
+                while let Some(stats) = stats.pop_completed() {
+                    let average_rtt = stats.average_rtt();
+                    println!("{}: {}, {}, {:?}", index, stats.sent, stats.received, average_rtt);
+                }
             }
 
             // End receive loop if no more probes are active
@@ -378,6 +402,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let display_sequence = probe.sequence / target_count as u64;
                         let index = probe.sequence % target_count as u64;
 
+                        let count_received = stats[target_index].on_received(display_sequence, round_trip_time);
+
                         display_mode.display_receive(index as usize, display_sequence, &packet, round_trip_time)?;
                     }
                 }
@@ -388,8 +414,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     if let Some(orig_message) = &error.original_message {
                         if let Some(probe) = probes.get(orig_message.seq as u64) {
                             let display_sequence = probe.sequence / target_count as u64;
-                            let index = probe.sequence % target_count as u64;
-                            display_mode.display_error(index as usize, display_sequence, &error)?;
+                            let target_index = probe.sequence % target_count as u64;
+                            display_mode.display_error(target_index as usize, display_sequence, &error)?;
+
+                            let bucket_index = display_sequence / sample_size as u64;
+                            stats[target_index as usize].on_error(bucket_index);
                         }
                     }
                 }

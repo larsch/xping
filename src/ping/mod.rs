@@ -504,7 +504,7 @@ mod tests {
         let addr = addrs.iter().find(|addr| addr.is_ipv4()).unwrap();
         let mut pinger = T::new()?;
         let sequence = 0xde42u16;
-        let timestamp = pinger.send(*addr, 64, sequence)?;
+        let _timestamp = pinger.send(*addr, 64, sequence)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
         assert!(matches!(packet, IcmpResult::EchoReply(_)));
         let packet = match packet {
@@ -530,7 +530,7 @@ mod tests {
         let target = *addr;
         let mut pinger = T::new()?;
         let sequence = 0xde42u16;
-        let timestamp = pinger.send(target, 64, sequence)?;
+        let _timestamp = pinger.send(target, 64, sequence)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
         assert!(matches!(packet, IcmpResult::EchoReply(_)));
         let packet = match packet {
@@ -565,7 +565,7 @@ mod tests {
         let mut pinger = T::new()?;
         let sequence = 0xde42u16;
         pinger.set_ttl(4)?;
-        let timestamp = pinger.send(*addr, 64, sequence)?;
+        let _timestamp = pinger.send(*addr, 64, sequence)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
         assert!(matches!(packet, IcmpResult::RecvError(_)));
         let err = match packet {
@@ -600,10 +600,10 @@ mod tests {
         let addrs = dns_lookup::lookup_host("google.com")?;
         let addr = addrs.iter().find(|addr| addr.is_ipv6()).unwrap();
         let mut pinger = T::new()?;
-        let timestamp = 0x4321fedcu64;
+        let _timestamp = 0x4321fedcu64;
         let sequence = 0xde42u16;
         pinger.set_ttl(4)?;
-        let timestamp = pinger.send(*addr, 64, sequence)?;
+        let _timestamp = pinger.send(*addr, 64, sequence)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
         assert!(matches!(packet, IcmpResult::RecvError(_)));
         let err = match packet {

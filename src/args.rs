@@ -71,6 +71,20 @@ pub struct Args {
     #[arg(short, long, default_value = "classic")]
     pub display: DisplayMode,
 
+    /// Report sample size.
+    /// 
+    /// Number of samples included in each printed reported. May alternative be
+    /// specified using `report_interval` option.
+    #[arg(short, long, default_value_t = 1, conflicts_with("report_interval"))]
+    pub sample_size: usize,
+
+    /// Report interval in seconds
+    /// 
+    /// Alternative way to specify the sample size, i.e. how many samples are
+    /// included in each printed report.
+    #[arg(long, conflicts_with("sample_size"))]
+    pub report_interval: Option<f64>,
+
     /// Time to live
     #[arg(short, long, default_value_t = 64)]
     pub ttl: u8,
