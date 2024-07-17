@@ -356,7 +356,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             while let Some(probe) = probes.pop_timeout() {
                 let index = (probe.sequence as usize) % target_count;
                 let display_sequence = probe.sequence / (target_count as u64);
-                display_mode.display_timeout(index as usize, display_sequence)?;
+                display_mode.display_timeout(index, display_sequence)?;
 
                 bucket_stacks.on_timeout(index, display_sequence);
                 // stats[index as usize].on_timeout(display_sequence);
