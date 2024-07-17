@@ -1,5 +1,6 @@
 use std::{collections::VecDeque, time::Duration};
 
+use crate::event_handler::GenericResult;
 use crate::event_handler::GlobalPingEventHandler;
 use crate::event_handler::TargetPingEventHandler;
 
@@ -60,7 +61,7 @@ impl StatsTable {
     }
 
     /// Add a completed packet to the table
-    fn on_completed(&mut self, sequence: u64) {
+    fn on_completed(&mut self, sequence: u64) -> GenericResult {
         let index = sequence / self.bucket_size;
         let table = &mut self.table;
         let delta_index = index.wrapping_sub(table.front().unwrap().index) as i64;
@@ -71,6 +72,7 @@ impl StatsTable {
         } else {
             // ignore, unexpected data
         }
+        Ok(())
     }
 
     pub fn pop_completed(&mut self) -> Option<Stats> {
@@ -85,7 +87,7 @@ impl StatsTable {
 }
 
 impl TargetPingEventHandler for StatsTable {
-    fn on_sent(&mut self, sequence: u64, _length: usize) {
+    fn on_sent(&mut self, sequence: u64, _length: usize) -> GenericResult {
         let index = sequence / self.bucket_size;
         if self.table.is_empty() || self.table.back().unwrap().index < index {
             let mut stats = Stats::new(index);
@@ -94,10 +96,11 @@ impl TargetPingEventHandler for StatsTable {
         } else {
             self.table.back_mut().unwrap().sent += 1;
         }
+        Ok(())
     }
 
     /// Add a received & completed packet to the table
-    fn on_received(&mut self, sequence: u64, round_trip_time: Duration) {
+    fn on_received(&mut self, sequence: u64, round_trip_time: Duration) -> GenericResult {
         let index = sequence / self.bucket_size;
         let table = &mut self.table;
         let delta_index = index.wrapping_sub(table.front().unwrap().index) as i64;
@@ -108,14 +111,15 @@ impl TargetPingEventHandler for StatsTable {
         } else {
             // ignore, unexpected data
         }
+        Ok(())
     }
 
-    fn on_error(&mut self, sequence: u64, _error: &crate::ping::RecvError) {
-        self.on_completed(sequence);
+    fn on_error(&mut self, sequence: u64, _error: &crate::ping::RecvError) -> GenericResult {
+        self.on_completed(sequence)
     }
 
-    fn on_timeout(&mut self, sequence: u64) {
-        self.on_completed(sequence);
+    fn on_timeout(&mut self, sequence: u64) -> GenericResult {
+        self.on_completed(sequence)
     }
 }
 
@@ -146,30 +150,30 @@ impl BucketStacks {
         for (index, stats) in self.buckets.iter_mut().enumerate() {
             while let Some(stats) = stats.pop_completed() {
                 let average_rtt = stats.average_rtt();
-                println!("{}: {}, {}, {:?}", index, stats.sent, stats.received, average_rtt);
+                // println!("{}: {}, {}, {:?}", index, stats.sent, stats.received, average_rtt);
             }
         }
     }
 }
 
 impl GlobalPingEventHandler for BucketStacks {
-    fn on_sent(&mut self, target: usize, seq: u64, length: usize) {
+    fn on_sent(&mut self, target: usize, seq: u64, length: usize) -> GenericResult {
         let seq = self.target_seq(seq);
-        self.buckets[target].on_sent(seq, length);
+        self.buckets[target].on_sent(seq, length)
     }
 
-    fn on_received(&mut self, target: usize, seq: u64, rtt: std::time::Duration) {
+    fn on_received(&mut self, target: usize, seq: u64, rtt: std::time::Duration) -> GenericResult {
         let seq = self.target_seq(seq);
-        self.buckets[target].on_received(seq, rtt);
+        self.buckets[target].on_received(seq, rtt)
     }
 
-    fn on_error(&mut self, target: usize, seq: u64, error: &crate::ping::RecvError) {
+    fn on_error(&mut self, target: usize, seq: u64, error: &crate::ping::RecvError) -> GenericResult {
         let seq = self.target_seq(seq);
-        self.buckets[target].on_error(seq, error);
+        self.buckets[target].on_error(seq, error)
     }
 
-    fn on_timeout(&mut self, target: usize, seq: u64) {
+    fn on_timeout(&mut self, target: usize, seq: u64) -> GenericResult {
         let seq = self.target_seq(seq);
-        self.buckets[target].on_timeout(seq);
+        self.buckets[target].on_timeout(seq)
     }
 }
