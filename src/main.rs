@@ -276,14 +276,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut display_mode: Box<dyn DisplayModeTrait> = match args.display {
         args::DisplayMode::Classic => Box::new(display::ClassicDisplayMode::new(columns, rows)),
-        // args::DisplayMode::Char => Box::new(display::CharDisplayMode::new(columns, rows)),
+        args::DisplayMode::CharGraph => Box::new(display::CharGraphDisplayMode::new(columns, rows)),
+        args::DisplayMode::Char => Box::new(display::CharDisplayMode::new(columns, rows)),
         // args::DisplayMode::Dumb => Box::new(display::DumbDisplayMode::new(columns, rows)),
         // args::DisplayMode::CharGraph => Box::new(display::CharGraphDisplayMode::new(columns, rows)),
         // args::DisplayMode::Plot => Box::new(display::HorizontalPlotDisplayMode::new(columns, rows)),
         args::DisplayMode::Debug => Box::new(display::DebugDisplayMode::new(columns, rows)),
-        // args::DisplayMode::None => Box::new(display::NoneDisplayMode::new(columns, rows)),
-        // args::DisplayMode::Influx => Box::new(display::InfluxLineProtocolDisplayMode::new(columns, rows)),
-        _ => unimplemented!("Unsupported display mode"),
+        args::DisplayMode::None => Box::new(display::NoneDisplayMode::new(columns, rows)),
+        args::DisplayMode::Plot => Box::new(display::HorizontalPlotDisplayMode::new(columns, rows)),
+        args::DisplayMode::Log => Box::new(display::LogDisplay::new(columns, rows)),
+        args::DisplayMode::Influx => Box::new(display::InfluxLineProtocolDisplayMode::new(columns, rows)),
     };
 
     for (index, target) in targets.iter().enumerate() {
@@ -318,15 +320,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let tx_timestamp = ping_protocol.send(target.address, args.length, icmp_sequence).unwrap();
             target.packets_transmitted += 1;
 
-            let display_sequence = sequence / target_count as u64;
-
-            bucket_stacks.on_sent(address_index, display_sequence, args.length)?;
+            bucket_stacks.on_sent(address_index, sequence, args.length)?;
 
             // stats[address_index].on_sent(display_sequence);
 
             let index = sequence % target_count as u64;
 
-            display_mode.on_sent(index as usize, display_sequence, args.length)?;
+            display_mode.on_sent(index as usize, sequence, args.length)?;
             // display_mode.on_sent(index as usize, &target.address, args.length, display_sequence)?;
 
             attempts_left -= 1;
@@ -357,10 +357,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Check for timeouts
             while let Some(probe) = probes.pop_timeout() {
                 let index = (probe.sequence as usize) % target_count;
-                let display_sequence = probe.sequence / (target_count as u64);
-                display_mode.on_timeout(index, display_sequence)?;
+                display_mode.on_timeout(index, sequence)?;
 
-                bucket_stacks.on_timeout(index, display_sequence)?;
+                bucket_stacks.on_timeout(index, sequence)?;
                 // stats[index as usize].on_timeout(display_sequence);
             }
 
@@ -404,13 +403,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let round_trip_time = probe.rtt(&packet).unwrap();
                         target.add_rtt(round_trip_time);
 
-                        let display_sequence = probe.sequence / target_count as u64;
                         let index = probe.sequence % target_count as u64;
 
-                        bucket_stacks.on_received(target_index, display_sequence, round_trip_time)?;
+                        bucket_stacks.on_received(target_index, probe.sequence, round_trip_time)?;
                         // let count_received = stats[target_index].on_received(display_sequence, round_trip_time);
 
-                        display_mode.on_received(index as usize, display_sequence, round_trip_time)?;
+                        display_mode.on_received(index as usize, probe.sequence, round_trip_time)?;
                     }
                 }
                 ping::IcmpResult::RecvError(error) => {
@@ -419,10 +417,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     if let Some(orig_message) = &error.original_message {
                         if let Some(probe) = probes.get(orig_message.seq as u64) {
-                            let display_sequence = probe.sequence / target_count as u64;
                             let target_index = probe.sequence % target_count as u64;
-                            display_mode.on_error(target_index as usize, display_sequence, &error)?;
-                            bucket_stacks.on_error(target_index as usize, display_sequence, &error)?;
+                            display_mode.on_error(target_index as usize, sequence, &error)?;
+                            bucket_stacks.on_error(target_index as usize, sequence, &error)?;
                         }
                     }
                 }

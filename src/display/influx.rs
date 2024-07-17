@@ -1,10 +1,11 @@
-use std::{collections::HashMap, net::IpAddr};
+use std::net::IpAddr;
+
+use crate::event_handler::GlobalPingEventHandler;
 
 use super::DisplayModeTrait;
 
 pub struct InfluxLineProtocolDisplayMode {
-    hostnames: HashMap<usize, String>,
-    addresses: HashMap<usize, IpAddr>,
+    targets: Vec<(IpAddr, String)>,
 }
 
 impl DisplayModeTrait for InfluxLineProtocolDisplayMode {
@@ -12,60 +13,54 @@ impl DisplayModeTrait for InfluxLineProtocolDisplayMode {
     where
         Self: Sized,
     {
-        InfluxLineProtocolDisplayMode {
-            hostnames: HashMap::new(),
-            addresses: HashMap::new(),
-        }
+        InfluxLineProtocolDisplayMode { targets: Vec::new() }
     }
 
     fn add_target(&mut self, index: usize, target: &IpAddr, hostname: &str) -> std::io::Result<()> {
-        self.hostnames.insert(index, hostname.to_string());
-        self.addresses.insert(index, *target);
+        assert!(index == self.targets.len());
+        self.targets.push((*target, hostname.to_string()));
         Ok(())
     }
 
-    fn display_send(&mut self, _index: usize, _target: &IpAddr, _length: usize, _sequence: u64) -> std::io::Result<()> {
+    fn close(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl GlobalPingEventHandler for InfluxLineProtocolDisplayMode {
+    fn on_sent(&mut self, _target: usize, _seq: u64, _length: usize) -> crate::event_handler::GenericResult {
         Ok(())
     }
 
-    fn display_receive(
-        &mut self,
-        index: usize,
-        _sequence: u64,
-        response: &crate::ping::EchoReply,
-        round_trip_time: std::time::Duration,
-    ) -> std::io::Result<()> {
+    fn on_received(&mut self, target: usize, _seq: u64, rtt: std::time::Duration) -> crate::event_handler::GenericResult {
+        let hostname = &self.targets[target].1;
+        let ip = &self.targets[target].0;
         let influx_timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
         println!(
             "ping,host={},ip={} sent=1i,recv=1i,rtt={} {}",
-            self.hostnames[&index],
-            response.addr.ip(),
-            round_trip_time.as_secs_f64(),
+            hostname,
+            ip,
+            rtt.as_secs_f64(),
             influx_timestamp
         );
         Ok(())
     }
 
-    fn display_error(&mut self, _index: usize, _sequence: u64, _error: &crate::ping::RecvError) -> std::io::Result<()> {
+    fn on_error(&mut self, _target: usize, _seq: u64, _error: &crate::ping::RecvError) -> crate::event_handler::GenericResult {
         Ok(())
     }
 
-    fn display_timeout(&mut self, index: usize, _sequence: u64) -> std::io::Result<()> {
+    fn on_timeout(&mut self, target: usize, _seq: u64) -> crate::event_handler::GenericResult {
+        let hostname = &self.targets[target].1;
+        let ip = &self.targets[target].0;
         let influx_timestamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        println!(
-            "ping,host={},ip={} sent=1i,recv=0i {}",
-            self.hostnames[&index], self.addresses[&index], influx_timestamp
-        );
-        Ok(())
-    }
-
-    fn close(&mut self) -> std::io::Result<()> {
+        println!("ping,host={},ip={} sent=1i,recv=0i {}", hostname, ip, influx_timestamp);
         Ok(())
     }
 }

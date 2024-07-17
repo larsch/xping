@@ -65,7 +65,7 @@ impl StatsTable {
         let index = sequence / self.bucket_size;
         let table = &mut self.table;
         let delta_index = index.wrapping_sub(table.front().unwrap().index) as i64;
-        if dbg!(delta_index) < 0 {
+        if delta_index < 0 {
             // ignore, old data
         } else if delta_index < table.len() as i64 {
             table[delta_index as usize].add_completed();
@@ -150,7 +150,7 @@ impl BucketStacks {
         for (index, stats) in self.buckets.iter_mut().enumerate() {
             while let Some(stats) = stats.pop_completed() {
                 let average_rtt = stats.average_rtt();
-                // println!("{}: {}, {}, {:?}", index, stats.sent, stats.received, average_rtt);
+                // println!("{}: sent={}, received={}, completed={}, avg_rtt={:?}", index, stats.sent, stats.received, stats.completed, average_rtt);
             }
         }
     }

@@ -7,7 +7,6 @@ pub enum DisplayMode {
     Classic,
     #[value(alias("c"))]
     Char,
-    Dumb,
     #[value(alias("g"))]
     CharGraph,
     #[value(alias("d"))]
@@ -18,6 +17,8 @@ pub enum DisplayMode {
     None,
     #[value(alias("i"))]
     Influx,
+    #[value(alias("l"))]
+    Log,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug, Default)]

@@ -2,6 +2,8 @@ use std::io::Write;
 
 use crossterm::QueueableCommand;
 
+use crate::event_handler::{GenericResult, GlobalPingEventHandler};
+
 use super::DisplayModeTrait;
 
 pub struct CharGraphDisplayMode {
@@ -24,7 +26,7 @@ fn latency_to_color(latency: std::time::Duration) -> crossterm::style::Color {
 }
 
 impl CharGraphDisplayMode {
-    fn display_outcome(&mut self, sequence: u64, outcome: &str, color: crossterm::style::Color) -> std::io::Result<()> {
+    fn display_outcome(&mut self, sequence: u64, outcome: &str, color: crossterm::style::Color) -> GenericResult {
         let current_row = self.position / self.columns;
         let target_row = sequence / self.columns;
         let current_col = self.position % self.columns;
@@ -44,7 +46,8 @@ impl CharGraphDisplayMode {
         self.stdout.write_all(outcome.as_bytes())?;
         self.stdout.queue(crossterm::style::ResetColor)?;
         self.stdout.queue(crossterm::cursor::RestorePosition)?;
-        self.stdout.flush()
+        self.stdout.flush()?;
+        Ok(())
     }
 }
 
@@ -56,47 +59,6 @@ impl DisplayModeTrait for CharGraphDisplayMode {
             stdout: std::io::stdout(),
         }
     }
-    fn display_send(&mut self, _index: usize, _target: &std::net::IpAddr, _length: usize, sequence: u64) -> std::io::Result<()> {
-        self.position = sequence + 1;
-        if sequence % self.columns == self.columns - 1 {
-            println!(".");
-        } else {
-            print!(".");
-        }
-        self.stdout.flush()
-    }
-
-    fn display_receive(
-        &mut self,
-        _index: usize,
-        sequence: u64,
-        _response: &crate::ping::EchoReply,
-        round_trip_time: std::time::Duration,
-    ) -> std::io::Result<()> {
-        let n = (round_trip_time.as_millis() as f64 + 1.0).ln().max(0.0) / 7.0 * (GRAPH_CHARS.len() - 1) as f64;
-        let n = n as usize;
-
-        // const step_size_millis: u128 = 20;
-        // let n = (round_trip_time.as_millis() / (step_size_millis)) as usize;
-        let n = n.min(GRAPH_CHARS.len() - 1);
-
-        // let color = crossterm::style::Color::Rgb { r: sequence as u8, g: sequence as u8, b: sequence as u8 };
-
-        // let color = match sequence % 3 {
-        //     0 => crossterm::style::Color::Green,
-        //     1 => crossterm::style::Color::Yellow,
-        //     2 => crossterm::style::Color::Rgb { r: (), g: (), b: () },
-        //     _ => crossterm::style::Color::White,
-        // };
-
-        let color = latency_to_color(round_trip_time);
-
-        self.display_outcome(sequence, &GRAPH_CHARS[n].to_string(), color)
-    }
-
-    fn display_timeout(&mut self, _index: usize, sequence: u64) -> std::io::Result<()> {
-        self.display_outcome(sequence, "?", crossterm::style::Color::Red)
-    }
 
     fn close(&mut self) -> std::io::Result<()> {
         if self.position % self.columns != 0 {
@@ -105,11 +67,35 @@ impl DisplayModeTrait for CharGraphDisplayMode {
         Ok(())
     }
 
-    fn display_error(&mut self, _index: usize, _sequence: u64, _error: &crate::ping::RecvError) -> std::io::Result<()> {
-        todo!()
-    }
-
     fn add_target(&mut self, _index: usize, _target: &std::net::IpAddr, _hostname: &str) -> std::io::Result<()> {
         Ok(())
+    }
+}
+
+impl GlobalPingEventHandler for CharGraphDisplayMode {
+    fn on_sent(&mut self, _target: usize, seq: u64, _length: usize) -> GenericResult {
+        self.position = seq + 1;
+        if seq % self.columns == self.columns - 1 {
+            println!(".");
+        } else {
+            print!(".");
+        }
+        Ok(self.stdout.flush()?)
+    }
+
+    fn on_received(&mut self, _target: usize, seq: u64, rtt: std::time::Duration) -> GenericResult {
+        let n = (rtt.as_millis() as f64 + 1.0).ln().max(0.0) / 7.0 * (GRAPH_CHARS.len() - 1) as f64;
+        let n = n as usize;
+        let n = n.min(GRAPH_CHARS.len() - 1);
+        let color = latency_to_color(rtt);
+        self.display_outcome(seq, &GRAPH_CHARS[n].to_string(), color)
+    }
+
+    fn on_error(&mut self, _target: usize, seq: u64, _error: &crate::ping::RecvError) -> GenericResult {
+        self.display_outcome(seq, "e", crossterm::style::Color::Magenta)
+    }
+
+    fn on_timeout(&mut self, _target: usize, seq: u64) -> GenericResult {
+        self.display_outcome(seq, "?", crossterm::style::Color::Red)
     }
 }

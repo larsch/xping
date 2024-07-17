@@ -2,14 +2,14 @@ use std::io::Write;
 
 use crossterm::QueueableCommand;
 
+use crate::event_handler::GlobalPingEventHandler;
+
 use super::DisplayModeTrait;
 
 pub struct HorizontalPlotDisplayMode {
-    // columns: u16,
     position: usize,
     stdout: std::io::Stdout,
     row_front_sequence: Vec<usize>,
-    colors: Vec<crossterm::style::Color>,
     address_col: usize,
     graph_col: usize,
 }
@@ -77,10 +77,13 @@ impl DisplayModeTrait for HorizontalPlotDisplayMode {
             position: 0,
             stdout: std::io::stdout(),
             row_front_sequence: Vec::new(),
-            colors: vec![crossterm::style::Color::Green, crossterm::style::Color::Blue],
             address_col: 2,
             graph_col: 4,
         }
+    }
+
+    fn close(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 
     fn add_target(&mut self, index: usize, target: &std::net::IpAddr, hostname: &str) -> std::io::Result<()> {
@@ -99,47 +102,38 @@ impl DisplayModeTrait for HorizontalPlotDisplayMode {
         }
         Ok(())
     }
+}
 
-    fn display_send(&mut self, index: usize, _target: &std::net::IpAddr, _length: usize, sequence: u64) -> std::io::Result<()> {
-        let row = index;
-        self.row_front_sequence[row] = sequence as usize;
+impl GlobalPingEventHandler for HorizontalPlotDisplayMode {
+    fn on_sent(&mut self, target: usize, seq: u64, _length: usize) -> crate::event_handler::GenericResult {
+        let row = target;
+        self.row_front_sequence[row] = seq as usize / self.position;
         self.print(row, self.graph_col, "\x1b[@?", crossterm::style::Color::Yellow)?;
         Ok(())
     }
 
-    fn display_receive(
-        &mut self,
-        _index: usize,
-        sequence: u64,
-        _response: &crate::ping::EchoReply,
-        round_trip_time: std::time::Duration,
-    ) -> std::io::Result<()> {
-        let row = _index;
-        let col = self.graph_col + self.row_front_sequence[row] - sequence as usize;
-        self.print(
-            row,
-            col,
-            &latency_to_char(round_trip_time).to_string(),
-            self.colors[row % self.colors.len()],
-        )?;
+    fn on_received(&mut self, target: usize, seq: u64, rtt: std::time::Duration) -> crate::event_handler::GenericResult {
+        let row = target;
+        let target_seq = (seq as usize) / self.position;
+        let col = self.graph_col + self.row_front_sequence[row] - target_seq;
+        let char = latency_to_char(rtt);
+        self.print(row, col, &char.to_string(), crossterm::style::Color::Green)?;
         Ok(())
     }
 
-    fn display_error(&mut self, index: usize, sequence: u64, _error: &crate::ping::RecvError) -> std::io::Result<()> {
-        let row = index;
-        let col = self.graph_col + self.row_front_sequence[row] - sequence as usize;
-        self.print(row, col, "e", crossterm::style::Color::Red)?;
+    fn on_error(&mut self, target: usize, seq: u64, _error: &crate::ping::RecvError) -> crate::event_handler::GenericResult {
+        let row = target;
+        let target_seq = (seq as usize) / self.position;
+        let col = self.graph_col + self.row_front_sequence[row] - target_seq;
+        self.print(row, col, "e", crossterm::style::Color::Magenta)?;
         Ok(())
     }
 
-    fn display_timeout(&mut self, index: usize, sequence: u64) -> std::io::Result<()> {
-        let row = index;
-        let col = self.graph_col + self.row_front_sequence[row] - sequence as usize;
+    fn on_timeout(&mut self, target: usize, seq: u64) -> crate::event_handler::GenericResult {
+        let row = target;
+        let target_seq = (seq as usize) / self.position;
+        let col = self.graph_col + self.row_front_sequence[row] - target_seq;
         self.print(row, col, "x", crossterm::style::Color::Red)?;
-        Ok(())
-    }
-
-    fn close(&mut self) -> std::io::Result<()> {
         Ok(())
     }
 }

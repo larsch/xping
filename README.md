@@ -28,7 +28,7 @@ Options:
   -l, --length <LENGTH>
           Length of ICMP payload in bytes [default: 64]
   -d, --display <DISPLAY>
-          Display mode [default: classic] [possible values: classic, char, dumb, char-graph, debug, plot, none, influx]
+          Display mode [default: classic] [possible values: classic, char, char-graph, debug, plot, none, influx, log]
   -s, --sample-size <SAMPLE_SIZE>
           Report sample size [default: 1]
       --report-interval <REPORT_INTERVAL>
