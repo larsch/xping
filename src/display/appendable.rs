@@ -2,6 +2,7 @@ use std::{collections::VecDeque, io::Write};
 
 use crossterm::QueueableCommand;
 
+/// A terminal display that can append text to existing rows.
 pub struct AppendableDisplay {
     current_row: usize,
     max_rows: usize,

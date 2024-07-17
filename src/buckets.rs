@@ -1,6 +1,7 @@
 use std::{collections::VecDeque, time::Duration};
 
-use xping::PingEventHandler;
+use crate::event_handler::GlobalPingEventHandler;
+use crate::event_handler::TargetPingEventHandler;
 
 #[derive(Clone)]
 pub struct Stats {
@@ -83,8 +84,8 @@ impl StatsTable {
     }
 }
 
-impl PingEventHandler for StatsTable {
-    fn on_sent(&mut self, sequence: u64) {
+impl TargetPingEventHandler for StatsTable {
+    fn on_sent(&mut self, sequence: u64, _length: usize) {
         let index = sequence / self.bucket_size;
         if self.table.is_empty() || self.table.back().unwrap().index < index {
             let mut stats = Stats::new(index);
@@ -109,11 +110,66 @@ impl PingEventHandler for StatsTable {
         }
     }
 
-    fn on_error(&mut self, sequence: u64) {
+    fn on_error(&mut self, sequence: u64, _error: &crate::ping::RecvError) {
         self.on_completed(sequence);
     }
 
     fn on_timeout(&mut self, sequence: u64) {
         self.on_completed(sequence);
+    }
+}
+
+pub struct Target {
+    pub address: std::net::IpAddr,
+    pub hostname: Option<String>,
+}
+
+pub struct BucketStacks {
+    buckets: Vec<StatsTable>,
+    targets: Vec<Target>,
+}
+
+impl BucketStacks {
+    pub fn new(bucket_size: usize, targets: Vec<Target>) -> Self {
+        Self {
+            buckets: targets.iter().map(|_| StatsTable::new(bucket_size)).collect(),
+            targets,
+        }
+    }
+
+    fn target_seq(&self, seq: u64) -> u64 {
+        seq / self.targets.len() as u64
+    }
+
+    pub fn check_completed(&mut self) {
+        // Check for completed buckets
+        for (index, stats) in self.buckets.iter_mut().enumerate() {
+            while let Some(stats) = stats.pop_completed() {
+                let average_rtt = stats.average_rtt();
+                println!("{}: {}, {}, {:?}", index, stats.sent, stats.received, average_rtt);
+            }
+        }
+    }
+}
+
+impl GlobalPingEventHandler for BucketStacks {
+    fn on_sent(&mut self, target: usize, seq: u64, length: usize) {
+        let seq = self.target_seq(seq);
+        self.buckets[target].on_sent(seq, length);
+    }
+
+    fn on_received(&mut self, target: usize, seq: u64, rtt: std::time::Duration) {
+        let seq = self.target_seq(seq);
+        self.buckets[target].on_received(seq, rtt);
+    }
+
+    fn on_error(&mut self, target: usize, seq: u64, error: &crate::ping::RecvError) {
+        let seq = self.target_seq(seq);
+        self.buckets[target].on_error(seq, error);
+    }
+
+    fn on_timeout(&mut self, target: usize, seq: u64) {
+        let seq = self.target_seq(seq);
+        self.buckets[target].on_timeout(seq);
     }
 }

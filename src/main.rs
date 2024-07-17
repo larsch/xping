@@ -5,23 +5,20 @@ mod args;
 mod buckets;
 mod display;
 mod duration;
+mod event_handler;
 mod ping;
 mod summary;
 
+use buckets::BucketStacks;
 use clap::Parser;
-use xping::PingEventHandler;
-
+use display::DisplayModeTrait;
+use event_handler::GlobalPingEventHandler;
+use ping::IcmpApi;
 use std::{
     collections::{HashMap, VecDeque},
     net::IpAddr,
     time::{Duration, Instant},
 };
-
-use crate::display::DisplayModeTrait;
-
-use crate::ping::IcmpApi;
-
-use buckets::StatsTable;
 
 #[cfg(debug_assertions)]
 mod update_readme;
@@ -299,7 +296,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut address_index_iter = (0..targets.len()).cycle();
     let target_count = targets.len();
 
-    let mut stats = vec![StatsTable::new(sample_size); targets.len()];
+    // let mut stats = vec![StatsTable::new(sample_size); targets.len()];
+
+    let target_targets = targets
+        .iter()
+        .map(|t| buckets::Target {
+            address: t.address,
+            hostname: Some(t.hostname.clone()),
+        })
+        .collect();
+
+    let mut bucket_stacks = BucketStacks::new(sample_size, target_targets);
 
     while attempts_left > 0 || !probes.is_empty() {
         if attempts_left > 0 {
@@ -312,7 +319,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let display_sequence = sequence / target_count as u64;
 
-            stats[address_index].on_sent(display_sequence);
+            bucket_stacks.on_sent(address_index, display_sequence, args.length);
+
+            // stats[address_index].on_sent(display_sequence);
 
             let index = sequence % target_count as u64;
 
@@ -345,21 +354,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Check for timeouts
             while let Some(probe) = probes.pop_timeout() {
-                let index = probe.sequence % target_count as u64;
-                let display_sequence = probe.sequence / target_count as u64;
+                let index = (probe.sequence as usize) % target_count;
+                let display_sequence = probe.sequence / (target_count as u64);
                 display_mode.display_timeout(index as usize, display_sequence)?;
 
-                let bucket_index = display_sequence / sample_size as u64;
-                stats[index as usize].on_timeout(display_sequence);
+                bucket_stacks.on_timeout(index, display_sequence);
+                // stats[index as usize].on_timeout(display_sequence);
             }
 
-            // Check for completed buckets
-            for (index, stats) in stats.iter_mut().enumerate() {
-                while let Some(stats) = stats.pop_completed() {
-                    let average_rtt = stats.average_rtt();
-                    println!("{}: {}, {}, {:?}", index, stats.sent, stats.received, average_rtt);
-                }
-            }
+            bucket_stacks.check_completed();
 
             // End receive loop if no more probes are active
             if probes.is_empty() && attempts_left == 0 {
@@ -402,7 +405,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         let display_sequence = probe.sequence / target_count as u64;
                         let index = probe.sequence % target_count as u64;
 
-                        let count_received = stats[target_index].on_received(display_sequence, round_trip_time);
+                        bucket_stacks.on_received(target_index, display_sequence, round_trip_time);
+                        // let count_received = stats[target_index].on_received(display_sequence, round_trip_time);
 
                         display_mode.display_receive(index as usize, display_sequence, &packet, round_trip_time)?;
                     }
@@ -416,9 +420,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let display_sequence = probe.sequence / target_count as u64;
                             let target_index = probe.sequence % target_count as u64;
                             display_mode.display_error(target_index as usize, display_sequence, &error)?;
-
-                            let bucket_index = display_sequence / sample_size as u64;
-                            stats[target_index as usize].on_error(bucket_index);
+                            bucket_stacks.on_error(target_index as usize, display_sequence, &error);
                         }
                     }
                 }

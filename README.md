@@ -17,20 +17,38 @@ Arguments:
   <TARGET>...  Address or name of target host
 
 Options:
-  -r, --rate <RATE>          Number of packets per second
-  -i, --interval <INTERVAL>  Packet interval in milliseconds [default: 1000]
-  -c, --count <COUNT>        Number of attempts (default infinite)
-  -w, --timeout <TIMEOUT>    Timeout waiting for response in milliseconds [default: 1000]
-  -l, --length <LENGTH>      Length of ICMP payload in bytes [default: 64]
-  -d, --display <DISPLAY>    Display mode [default: classic] [possible values: classic, char, dumb, char-graph, debug, plot, none, influx]
-  -t, --ttl <TTL>            Time to live [default: 64]
-      --api <API>            [default: icmp-socket] [possible values: icmp-socket]
-  -4, --ipv4                 Force using IPv4
-  -6, --ipv6                 Force using IPv6
-  -a, --all                  Target all resolved addresses
-      --summary <SUMMARY>    [default: text] [possible values: text, json, csv, none]
-  -h, --help                 Print help (see more with '--help')
-  -V, --version              Print version
+  -r, --rate <RATE>
+          Number of packets per second
+  -i, --interval <INTERVAL>
+          Packet interval in milliseconds [default: 1000]
+  -c, --count <COUNT>
+          Number of attempts (default infinite)
+  -w, --timeout <TIMEOUT>
+          Timeout waiting for response in milliseconds [default: 1000]
+  -l, --length <LENGTH>
+          Length of ICMP payload in bytes [default: 64]
+  -d, --display <DISPLAY>
+          Display mode [default: classic] [possible values: classic, char, dumb, char-graph, debug, plot, none, influx]
+  -s, --sample-size <SAMPLE_SIZE>
+          Report sample size [default: 1]
+      --report-interval <REPORT_INTERVAL>
+          Report interval in seconds
+  -t, --ttl <TTL>
+          Time to live [default: 64]
+      --api <API>
+          [default: icmp-socket] [possible values: icmp-socket]
+  -4, --ipv4
+          Force using IPv4
+  -6, --ipv6
+          Force using IPv6
+  -a, --all
+          Target all resolved addresses
+      --summary <SUMMARY>
+          [default: text] [possible values: text, json, csv, none]
+  -h, --help
+          Print help (see more with '--help')
+  -V, --version
+          Print version
 
 ```
 <!-- END CLI -->

@@ -43,37 +43,6 @@ pub trait BucketDisplay {
     fn complete(&mut self, target: usize, index: usize, sent: usize, received: usize, lost: usize, rtt: std::time::Duration);
 }
 
-pub struct ClassicBucketDisplay {
-    position: u64,
-    widths: HashMap<usize, usize>,
-    stdout: std::io::Stdout,
-}
-
-impl BucketDisplay for ClassicBucketDisplay {
-    fn new(columns: u16, rows: u16) -> Self
-    where
-        Self: Sized,
-    {
-        ClassicBucketDisplay {
-            position: 0,
-            widths: HashMap::new(),
-            stdout: std::io::stdout(),
-        }
-    }
-
-    fn add_target(&mut self, index: usize, target: &IpAddr, hostname: &str) -> std::io::Result<()> {
-        todo!()
-    }
-
-    fn begin(&mut self, target: usize, index: usize, count: usize) {
-        todo!()
-    }
-
-    fn complete(&mut self, target: usize, index: usize, sent: usize, received: usize, lost: usize, rtt: std::time::Duration) {
-        todo!()
-    }
-}
-
 pub struct ClassicDisplayMode {
     display: AppendableDisplay,
 }
@@ -449,7 +418,7 @@ impl DisplayModeTrait for NoneDisplayMode {
 }
 
 pub struct HorizontalPlotDisplayMode {
-    columns: u16,
+    // columns: u16,
     position: usize,
     stdout: std::io::Stdout,
     row_front_sequence: Vec<usize>,
@@ -515,7 +484,7 @@ impl DisplayModeTrait for HorizontalPlotDisplayMode {
         Self: Sized,
     {
         HorizontalPlotDisplayMode {
-            columns,
+            // columns,
             position: 0,
             stdout: std::io::stdout(),
             row_front_sequence: Vec::new(),
