@@ -14,6 +14,12 @@ repository = "https://github.com/larsch/xping"
 name = "xping"
 path = "src/main.rs"
 
+[workspace]
+members = [
+    ".",
+    "adhoc/testappendable"
+]
+
 [dependencies]
 anyhow = { version = "1.0.86", optional = true }
 clap = { version = "4.5.4", features = ["derive"] }
@@ -42,7 +48,7 @@ features = [
 
 [target.'cfg(unix)'.build-dependencies]
 clap_complete = "4.5.8"
-clap ={ version = "4.5.4", features = ["derive"] }
+clap = { version = "4.5.4", features = ["derive"] }
 
 [features]
 default = ["iphelper"]
