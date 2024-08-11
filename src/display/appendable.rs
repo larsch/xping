@@ -41,9 +41,10 @@ impl AppendableDisplay {
     /// If the row is above the maximum displayed rows (outside of screen), the
     /// text is discarded.
     pub fn append(&mut self, row: usize, text: &str) -> std::io::Result<()> {
-        while row > self.current_row {
+        while row >= self.current_row {
             self.current_row += 1;
-            self.stdout.write_all(b"\n").unwrap();
+            self.widths.push_back(0);
+            self.stdout.write_all(b"<insline>\n").unwrap();
         }
         self.flush();
         let delta_rows = self.current_row - row;
@@ -57,9 +58,47 @@ impl AppendableDisplay {
 
         self.stdout.queue(crossterm::cursor::SavePosition)?;
         self.stdout.queue(crossterm::cursor::MoveUp(delta_rows as u16))?;
-        self.stdout.queue(crossterm::cursor::MoveToColumn(old_width as u16 + 1))?;
+        if old_width > 0 {
+            self.stdout.queue(crossterm::cursor::MoveToColumn(old_width as u16))?;
+        }
+        // self.stdout.write_all(format!("up {}, right {}", delta_rows, old_width).as_bytes())?;
         self.stdout.write_all(text.as_bytes()).unwrap();
         self.stdout.queue(crossterm::cursor::RestorePosition)?;
         self.stdout.flush()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_appendable_display() {
+        let mut display = AppendableDisplay::new(25);
+        display.create("0 Hello").unwrap();
+        display.create("1 World").unwrap();
+        display.create("2 Foo").unwrap();
+        display.create("3 Bar").unwrap();
+        display.append(0, ">0 Hello, World!").unwrap();
+        display.append(1, ">1 Hello, World!").unwrap();
+        display.append(2, ">2 Hello, World!").unwrap();
+        display.append(3, ">3 Hello, World!").unwrap();
+        display.append(4, ">4 Hello, World!").unwrap();
+    }
+
+    #[test]
+    fn test_appendable_gap() {
+        let mut display = AppendableDisplay::new(25);
+        for i in 0..10 {
+            display.create(&format!("{} Hello", i)).unwrap();
+            display.append(i, &format!(">{} Hello, World!", i)).unwrap();
+        }
+        for i in 10..20 {
+            display.create(&format!("{} Hello", i)).unwrap();
+        }
+        for i in 20..30 {
+            display.create(&format!("{} Hello", i)).unwrap();
+            display.append(i, &format!(">{} Hello, World!", i)).unwrap();
+        }
     }
 }

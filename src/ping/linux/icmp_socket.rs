@@ -114,7 +114,7 @@ impl IcmpSocket {
         }
     }
 
-    fn recv(&mut self) -> Result<crate::ping::IcmpResult, crate::ping::Error> {
+    fn recv(&mut self) -> Result<crate::ping::RecvResult, crate::ping::Error> {
         let mut buf = [0u8; 65536];
         let buf_ptr = &mut buf as *mut u8 as *mut libc::c_void;
         // let flags = 0;
@@ -232,7 +232,7 @@ impl IcmpSocket {
         if recvmsg_flags & libc::MSG_ERRQUEUE == 0 {
             let packet = &buf[..received_bytes.max(0)];
             let addr = addr.try_into().unwrap();
-            Ok(crate::ping::IcmpResult::EchoReply(crate::ping::EchoReply {
+            Ok(crate::ping::RecvResult::EchoReply(crate::ping::EchoReply {
                 addr,
                 message: match addr {
                     SocketAddr::V4(_) => crate::ping::parse_icmp_packet(packet).unwrap(),
@@ -247,7 +247,7 @@ impl IcmpSocket {
 
             let addr = addr.try_into().unwrap();
             if let Some(extended_error) = extended_error {
-                Ok(crate::ping::IcmpResult::RecvError(crate::ping::RecvError {
+                Ok(crate::ping::RecvResult::RecvError(crate::ping::RecvError {
                     addr: Some(addr),
                     #[allow(clippy::useless_conversion)]
                     error: Some(std::io::Error::from_raw_os_error(extended_error.errno).into()),
@@ -261,7 +261,7 @@ impl IcmpSocket {
                     },
                 }))
             } else {
-                Ok(crate::ping::IcmpResult::RecvError(crate::ping::RecvError {
+                Ok(crate::ping::RecvResult::RecvError(crate::ping::RecvError {
                     addr: Some(addr),
                     #[allow(clippy::useless_conversion)]
                     error: Some(orig_error.unwrap().into()),
@@ -314,7 +314,7 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
         }
     }
 
-    fn recv(&mut self, timeout: std::time::Duration) -> Result<crate::ping::IcmpResult, crate::ping::Error> {
+    fn recv(&mut self, timeout: std::time::Duration) -> Result<crate::ping::RecvResult, crate::ping::Error> {
         let epoll_fd = unsafe { libc::epoll_create1(0) };
         if epoll_fd < 0 {
             return Err(std::io::Error::last_os_error())?;
@@ -353,11 +353,11 @@ impl crate::ping::IcmpApi for IcmpSocketApi {
                 -1 => {
                     let last_error = std::io::Error::last_os_error();
                     match last_error.kind() {
-                        std::io::ErrorKind::Interrupted => Ok(crate::ping::IcmpResult::Interrupted),
+                        std::io::ErrorKind::Interrupted => Ok(crate::ping::RecvResult::Interrupted),
                         _ => Err(last_error)?,
                     }
                 }
-                0 => Ok(crate::ping::IcmpResult::Timeout),
+                0 => Ok(crate::ping::RecvResult::RecvTimeout),
                 _ => {
                     for ev in evs.iter() {
                         if ev.events & (libc::EPOLLIN | libc::EPOLLERR) as u32 != 0 {

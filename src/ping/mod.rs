@@ -62,7 +62,7 @@ pub trait IcmpApi {
     ///
     /// This function will return an error if the underlying IO causes an
     /// unexpected error.
-    fn recv(&mut self, timeout: std::time::Duration) -> Result<IcmpResult, Error>;
+    fn recv(&mut self, timeout: std::time::Duration) -> Result<RecvResult, Error>;
 }
 
 #[derive(Debug)]
@@ -115,23 +115,15 @@ pub struct IcmpMessage {
     pub timestamp: Option<std::time::SystemTime>,
 }
 
-// Todo: refactor result, be one of
-// - IcmpEchoResponse:
-//   - Local timestamp
-//   - OS rx timestamp
-//   - Recvttl
-// - IcmpError
-//   - Local timestamp
-//   - offender
-//   - icmp_type/code
-
 #[derive(Debug)]
-pub enum IcmpResult {
+pub enum RecvResult {
+    /// An ICMP packet was received
     EchoReply(EchoReply),
-    #[allow(dead_code)]
+    /// An error occurred while receiving an ICMP packet
     RecvError(RecvError),
-    Timeout,
-    #[allow(dead_code)]
+    /// Timeout occurred while waiting for a packet
+    RecvTimeout,
+    /// The receive operation was interrupted
     Interrupted,
 }
 
@@ -417,10 +409,10 @@ mod tests {
         let tx_timestamp = pinger.send(target, 64, sequence).unwrap();
         let packet = pinger.recv(std::time::Duration::from_secs(1)).unwrap();
         // must always be a IcmpPacket
-        assert!(matches!(packet, IcmpResult::EchoReply(_)));
+        assert!(matches!(packet, RecvResult::EchoReply(_)));
         // must be an echo reply
         let packet = match packet {
-            IcmpResult::EchoReply(packet) => packet,
+            RecvResult::EchoReply(packet) => packet,
             _ => unreachable!(),
         };
         assert!(matches!(packet.message.icmp_type, IcmpType::EchoReply(_)));
@@ -461,10 +453,10 @@ mod tests {
         let timestamp = pinger.send(target, 64, sequence).unwrap();
         let packet = pinger.recv(std::time::Duration::from_secs(1)).unwrap();
         // must always be a IcmpPacket
-        assert!(matches!(packet, IcmpResult::EchoReply(_)));
+        assert!(matches!(packet, RecvResult::EchoReply(_)));
         // must be an echo reply
         let packet = match packet {
-            IcmpResult::EchoReply(packet) => packet,
+            RecvResult::EchoReply(packet) => packet,
             _ => unreachable!(),
         };
         assert!(
@@ -506,9 +498,9 @@ mod tests {
         let sequence = 0xde42u16;
         let _timestamp = pinger.send(*addr, 64, sequence)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
-        assert!(matches!(packet, IcmpResult::EchoReply(_)));
+        assert!(matches!(packet, RecvResult::EchoReply(_)));
         let packet = match packet {
-            IcmpResult::EchoReply(packet) => packet,
+            RecvResult::EchoReply(packet) => packet,
             _ => unreachable!(),
         };
         assert!(packet.recvttl.is_some());
@@ -532,9 +524,9 @@ mod tests {
         let sequence = 0xde42u16;
         let _timestamp = pinger.send(target, 64, sequence)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
-        assert!(matches!(packet, IcmpResult::EchoReply(_)));
+        assert!(matches!(packet, RecvResult::EchoReply(_)));
         let packet = match packet {
-            IcmpResult::EchoReply(packet) => packet,
+            RecvResult::EchoReply(packet) => packet,
             _ => unreachable!(),
         };
         assert!(packet.recvttl.is_some());
@@ -567,9 +559,9 @@ mod tests {
         pinger.set_ttl(4)?;
         let _timestamp = pinger.send(*addr, 64, sequence)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
-        assert!(matches!(packet, IcmpResult::RecvError(_)));
+        assert!(matches!(packet, RecvResult::RecvError(_)));
         let err = match packet {
-            IcmpResult::RecvError(err) => err,
+            RecvResult::RecvError(err) => err,
             _ => unreachable!(),
         };
         assert_eq!(err.icmp_type, Some(11));
@@ -605,9 +597,9 @@ mod tests {
         pinger.set_ttl(4)?;
         let _timestamp = pinger.send(*addr, 64, sequence)?;
         let packet = pinger.recv(std::time::Duration::from_secs(1))?;
-        assert!(matches!(packet, IcmpResult::RecvError(_)));
+        assert!(matches!(packet, RecvResult::RecvError(_)));
         let err = match packet {
-            IcmpResult::RecvError(err) => err,
+            RecvResult::RecvError(err) => err,
             _ => unreachable!(),
         };
         #[cfg(target_os = "windows")]
@@ -652,7 +644,7 @@ mod tests {
         while !remaining.is_empty() {
             let packet = pinger.recv(std::time::Duration::from_secs(1))?;
             let packet = match packet {
-                IcmpResult::EchoReply(packet) => packet,
+                RecvResult::EchoReply(packet) => packet,
                 _ => unreachable!(),
             };
             assert!(remaining.remove(&packet.addr.ip()));

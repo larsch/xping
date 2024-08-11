@@ -262,9 +262,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     ping_protocol.set_ttl(args.ttl).expect("Failed to set TTL");
 
-    let mut sequence = 0u64;
+    // Global probe sequence number. Increments for each probe sent for each
+    // target. Dividing by the number of targets will give the sequence number
+    // for the target. Taking the modulo of the number of targets will give the
+    // index of the target.
+    let mut global_seq = 0u64;
 
-    let mut attempts_left = args.count.unwrap_or(u32::MAX);
+    let mut probes_remaining = args.count.unwrap_or(u32::MAX);
 
     let (columns, rows) = match crossterm::terminal::size() {
         Ok((w, h)) => (w - 1, h),
@@ -311,124 +315,118 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut bucket_stacks = BucketStacks::new(sample_size, target_targets);
 
-    while attempts_left > 0 || !probes.is_empty() {
-        if attempts_left > 0 {
-            let address_index = address_index_iter.next().unwrap();
-            let target = &mut targets[address_index];
+    while probes_remaining > 0 || !probes.is_empty() {
+        // check if we need to send a new probe
+        if probes_remaining > 0 && (next_send - std::time::Instant::now()).is_zero() {
+            let target_index = address_index_iter.next().unwrap();
+            let target = &mut targets[target_index];
 
-            let icmp_sequence = sequence as u16;
-            let tx_timestamp = ping_protocol.send(target.address, args.length, icmp_sequence).unwrap();
-            target.packets_transmitted += 1;
+            let icmp_seq = global_seq as u16;
+            let tx_timestamp = ping_protocol.send(target.address, args.length, icmp_seq).unwrap();
 
-            bucket_stacks.on_sent(address_index, sequence, args.length)?;
-
-            // stats[address_index].on_sent(display_sequence);
-
-            let index = sequence % target_count as u64;
-
-            display_mode.on_sent(index as usize, sequence, args.length)?;
-            // display_mode.on_sent(index as usize, &target.address, args.length, display_sequence)?;
-
-            attempts_left -= 1;
+            bucket_stacks.on_sent(target_index, global_seq, args.length)?;
+            display_mode.on_sent(target_index, global_seq, args.length)?;
 
             probes.add(ProbeInfo {
-                sequence,
+                sequence: global_seq,
                 timeout: std::time::Instant::now() + icmp_timeout,
                 tx_timestamp,
                 response_received: false,
             });
-            sequence += 1;
+
+            target.packets_transmitted += 1;
+            probes_remaining -= 1;
+            global_seq += 1;
             next_send += interval;
         }
 
-        // Receive loop
-        loop {
-            if let Ok(()) = interrupt_rx.try_recv() {
-                if attempts_left > 0 {
-                    // Cancel all remaining probes
-                    attempts_left = 0;
-                } else {
-                    // Exit immediately
-                    probes.clear();
-                    break;
-                }
-            }
-
-            // Check for timeouts
-            while let Some(probe) = probes.pop_timeout() {
-                let index = (probe.sequence as usize) % target_count;
-                display_mode.on_timeout(index, sequence)?;
-
-                bucket_stacks.on_timeout(index, sequence)?;
-                // stats[index as usize].on_timeout(display_sequence);
-            }
-
-            bucket_stacks.check_completed();
-
-            // End receive loop if no more probes are active
-            if probes.is_empty() && attempts_left == 0 {
+        if let Ok(()) = interrupt_rx.try_recv() {
+            if probes_remaining > 0 {
+                // Cancel all remaining probes
+                probes_remaining = 0;
+            } else {
+                // Exit immediately
+                probes.clear();
                 break;
             }
+        }
 
-            // Determine how long to wait until the next event
-            let wait_until = if attempts_left > 0 {
-                if let Some(timeout) = probes.next_timeout() {
-                    next_send.min(timeout) // Wait for next timeout or next send
-                } else {
-                    next_send // Wait for next send
-                }
-            } else if let Some(timeout) = probes.next_timeout() {
-                timeout // Wait for next timeout
+        // Check for timeouts
+        while let Some(probe) = probes.pop_timeout() {
+            let index = (probe.sequence as usize) % target_count;
+            display_mode.on_timeout(index, probe.sequence)?;
+
+            bucket_stacks.on_timeout(index, global_seq)?;
+            // stats[index as usize].on_timeout(display_sequence);
+        }
+
+        bucket_stacks.check_completed();
+
+        // End receive loop if no more probes are active
+        if probes.is_empty() && probes_remaining == 0 {
+            break;
+        }
+
+        // Determine how long to wait until the next event
+        let wait_until = if probes_remaining > 0 {
+            if let Some(timeout) = probes.next_timeout() {
+                next_send.min(timeout) // Wait for next timeout or next send
             } else {
-                break; // No more active probes
-            };
-
-            let time_left = wait_until - std::time::Instant::now();
-
-            // Ensure that Ctrl-C is responsive
-            let time_left = time_left.min(Duration::from_millis(50));
-
-            let response = ping_protocol.recv(time_left)?;
-            match response {
-                ping::IcmpResult::EchoReply(packet) => {
-                    let target_index = target_indices[&packet.addr.ip()];
-                    let target = &mut targets[target_index];
-                    target.packets_received += 1;
-
-                    if probes.is_empty() {
-                        continue;
-                    }
-
-                    if let Some(probe) = probes.get(packet.message.seq as u64) {
-                        let round_trip_time = probe.rtt(&packet).unwrap();
-                        target.add_rtt(round_trip_time);
-
-                        let index = probe.sequence % target_count as u64;
-
-                        bucket_stacks.on_received(target_index, probe.sequence, round_trip_time)?;
-                        // let count_received = stats[target_index].on_received(display_sequence, round_trip_time);
-
-                        display_mode.on_received(index as usize, probe.sequence, round_trip_time)?;
-                    }
-                }
-                ping::IcmpResult::RecvError(error) => {
-                    if probes.is_empty() {
-                        continue;
-                    }
-                    if let Some(orig_message) = &error.original_message {
-                        if let Some(probe) = probes.get(orig_message.seq as u64) {
-                            let target_index = probe.sequence % target_count as u64;
-                            display_mode.on_error(target_index as usize, sequence, &error)?;
-                            bucket_stacks.on_error(target_index as usize, sequence, &error)?;
-                        }
-                    }
-                }
-                ping::IcmpResult::Timeout => (),
-                ping::IcmpResult::Interrupted => (),
+                next_send // Wait for next send
             }
+        } else if let Some(timeout) = probes.next_timeout() {
+            timeout // Wait for next timeout
+        } else {
+            break; // No more active probes
+        };
 
-            if attempts_left > 0 && (next_send - std::time::Instant::now()).is_zero() {
-                break; // Break receive loop and send next request
+        let time_left = wait_until - std::time::Instant::now();
+
+        // Ensure that Ctrl-C is responsive
+        let time_left = time_left.min(Duration::from_millis(50));
+
+        let result = ping_protocol.recv(time_left)?;
+        match result {
+            ping::RecvResult::EchoReply(packet) => {
+                let target_index = target_indices[&packet.addr.ip()];
+                let target = &mut targets[target_index];
+                target.packets_received += 1;
+
+                if probes.is_empty() {
+                    continue;
+                }
+
+                if let Some(probe) = probes.get(packet.message.seq as u64) {
+                    let round_trip_time = probe.rtt(&packet).unwrap();
+                    target.add_rtt(round_trip_time);
+
+                    let index = probe.sequence % target_count as u64;
+
+                    bucket_stacks.on_received(target_index, probe.sequence, round_trip_time)?;
+                    // let count_received = stats[target_index].on_received(display_sequence, round_trip_time);
+
+                    display_mode.on_received(index as usize, probe.sequence, round_trip_time)?;
+                }
+            }
+            ping::RecvResult::RecvError(error) => {
+                if probes.is_empty() {
+                    continue;
+                }
+                if let Some(orig_message) = &error.original_message {
+                    if let Some(probe) = probes.get(orig_message.seq as u64) {
+                        let target_index = probe.sequence % target_count as u64;
+                        display_mode.on_error(target_index as usize, global_seq, &error)?;
+                        bucket_stacks.on_error(target_index as usize, global_seq, &error)?;
+                    }
+                }
+            }
+            ping::RecvResult::RecvTimeout => {
+                // timeout while waiting for response, just let loop
+                // continue
+            }
+            ping::RecvResult::Interrupted => {
+                // Interrupted by Ctrl-C, let loop continue (handled at
+                // start of loop)
             }
         }
     }

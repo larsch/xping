@@ -39,7 +39,7 @@ impl GlobalPingEventHandler for ClassicDisplayMode {
     }
 
     fn on_received(&mut self, _target: usize, seq: u64, rtt: std::time::Duration) -> crate::event_handler::GenericResult {
-        let output = format!("time={:?}", rtt);
+        let output = format!(" time={:?}", rtt);
         Ok(self.display.append(seq as usize, &output)?)
     }
 
@@ -48,6 +48,6 @@ impl GlobalPingEventHandler for ClassicDisplayMode {
     }
 
     fn on_error(&mut self, _target: usize, seq: u64, error: &crate::ping::RecvError) -> crate::event_handler::GenericResult {
-        Ok(self.display.append(seq as usize, &format!("{:?}", error))?)
+        Ok(self.display.append(seq as usize, &format!(" {:?}", error))?)
     }
 }
